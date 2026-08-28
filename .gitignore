@@ -1,0 +1,39 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Rust build artifacts
+src-tauri/target
+
+# PCPAIE temporary files
+pcpaie_tmp
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
+# Python audit scripts (temporary)
+audit_*.py
+check_*.py
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
