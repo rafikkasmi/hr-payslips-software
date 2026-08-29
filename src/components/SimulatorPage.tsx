@@ -134,6 +134,39 @@ export function SimulatorPage() {
     [employees, selectedEmpId]
   );
 
+  // Auto-load rubriques from employee's profile (poste) when selected
+  const loadProfileRubriques = useCallback(async (empId: number) => {
+    try {
+      const summary = await api.getPreCalcSummary(empId, period);
+      const rubs = (Array.isArray(summary.rubriques) ? summary.rubriques : []) as Record<string, unknown>[];
+      const inputs: RubInput[] = rubs.map(r => {
+        const code = String(r.code ?? "").replace(/^R/, "").padStart(3, "0");
+        const meta = allRubriques.find(m => m.code === code);
+        return {
+          code,
+          libelle: String(r.libelle ?? meta?.libelle ?? "(sans libellé)"),
+          montant: Number(r.value ?? meta?.init_val ?? 0),
+          nombre: 0,
+          classe: meta?.classe ?? 0,
+        };
+      });
+      setSimRubriques(inputs);
+    } catch (e) {
+      console.error("Failed to load profile rubriques:", e);
+      setSimRubriques([]);
+    }
+  }, [allRubriques, period]);
+
+  // When employee is selected, auto-fill the sim table with their profile rubriques
+  useEffect(() => {
+    if (selectedEmpId) {
+      loadProfileRubriques(selectedEmpId);
+    } else {
+      setSimRubriques([]);
+      setCalcResult(null);
+    }
+  }, [selectedEmpId, loadProfileRubriques]);
+
   const filteredCatalog = useMemo(() => {
     const s = rubSearch.trim().toLowerCase();
     return allRubriques.filter(r => {
@@ -193,6 +226,7 @@ export function SimulatorPage() {
   useEffect(() => {
     if (!selectedEmpId || simRubriques.length === 0) {
       setCalcResult(null);
+      setCalcError(null);
       return;
     }
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -290,7 +324,7 @@ export function SimulatorPage() {
 
       {!selectedEmpId && !empSearch && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm text-blue-700">
-          Sélectionnez un employé pour activer le calcul
+          Sélectionnez un employé → sa table de simulation se remplit automatiquement avec les rubriques de son profil
         </div>
       )}
 
@@ -372,8 +406,9 @@ export function SimulatorPage() {
           {simRubriques.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center text-gray-300">
               <Calculator className="mb-2 h-10 w-10" />
-              <p className="text-sm">Cliquez une rubrique →</p>
-              <p className="text-xs">pour l'ajouter à la simulation</p>
+              <p className="text-sm">Sélectionnez un employé</p>
+              <p className="text-xs">pour charger son profil de paie</p>
+              <p className="mt-2 text-xs text-gray-400">ou cliquez une rubrique ←</p>
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto">
@@ -440,7 +475,8 @@ export function SimulatorPage() {
           ) : simRubriques.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center text-gray-400">
               <Calculator className="mb-2 h-10 w-10" />
-              <p className="text-sm">Ajoutez des rubriques à la simulation</p>
+              <p className="text-sm">Sélectionnez un employé pour charger son profil</p>
+              <p className="text-xs mt-1">ou ajoutez des rubriques manuellement</p>
             </div>
           ) : calcError ? (
             <div className="flex flex-1 flex-col items-center justify-center text-red-500">
