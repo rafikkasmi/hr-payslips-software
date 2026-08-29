@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api, type Bonus, type EmployeeSummary } from "../lib/api";
 import { formatCurrency } from "../lib/utils";
-import { Plus, Trash2, Gift, Loader2, ChevronDown, ChevronUp, Search } from "lucide-react";
+import { Plus, Trash2, Gift, Loader2, ChevronDown, ChevronUp, Search, Settings, Save } from "lucide-react";
 
 export function BonusesPage() {
   const [bonuses, setBonuses] = useState<Bonus[]>([]);
@@ -11,6 +11,17 @@ export function BonusesPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [selectedEmpIds, setSelectedEmpIds] = useState<Set<number>>(new Set());
   const [empSearch, setEmpSearch] = useState("");
+
+  // Edit state
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editAmount, setEditAmount] = useState(0);
+  const [editIsImposable, setEditIsImposable] = useState(false);
+  const [editIsCotisable, setEditIsCotisable] = useState(false);
+  const [editRecurrence, setEditRecurrence] = useState("one_time");
+  const [editRecurrenceCount, setEditRecurrenceCount] = useState(0);
+  const [editPayPeriod, setEditPayPeriod] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Form state
   const [title, setTitle] = useState("");
@@ -79,6 +90,38 @@ export function BonusesPage() {
   const handleDelete = async (id: number) => {
     if (!confirm("Delete this bonus?")) return;
     try { await api.deleteBonus(id); loadBonuses(); } catch (e) { console.error(e); }
+  };
+
+  const startEdit = (b: Bonus) => {
+    setEditingId(b.id);
+    setEditTitle(b.title);
+    setEditAmount(b.amount);
+    setEditIsImposable(b.is_imposable !== 0);
+    setEditIsCotisable(b.is_cotisable !== 0);
+    setEditRecurrence(b.recurrence_type ?? "one_time");
+    setEditRecurrenceCount(b.recurrence_count ?? 0);
+    setEditPayPeriod(b.pay_period ?? "");
+  };
+
+  const cancelEdit = () => { setEditingId(null); };
+
+  const handleSaveEdit = async () => {
+    if (!editingId || !editTitle.trim()) return;
+    setSavingEdit(true);
+    try {
+      await api.updateBonus(editingId, {
+        title: editTitle.trim(),
+        amount: editAmount,
+        is_imposable: editIsImposable,
+        is_cotisable: editIsCotisable,
+        recurrence_type: editRecurrence,
+        recurrence_count: editRecurrenceCount || 0,
+        pay_period: editPayPeriod || null,
+      });
+      setEditingId(null);
+      loadBonuses();
+    } catch (e) { console.error(e); }
+    finally { setSavingEdit(false); }
   };
 
   return (
@@ -259,17 +302,73 @@ export function BonusesPage() {
                     {b.bonus_type === "bonus" ? "+" : "-"}{b.is_percentage ? `${b.amount}%` : formatCurrency(b.amount)}
                   </span>
                   <span className="text-xs text-gray-500">{b.target_type}</span>
+                  <button onClick={() => startEdit(b)} className="text-blue-500 hover:text-blue-700"><Settings className="h-4 w-4" /></button>
                   <button onClick={() => handleDelete(b.id)} className="text-red-500 hover:text-red-700"><Trash2 className="h-4 w-4" /></button>
                 </div>
               </div>
               {expandedId === b.id && (
-                <div className="mt-3 border-t border-gray-100 pt-3 grid grid-cols-3 gap-2 text-xs text-gray-600">
-                  <div><span className="font-medium text-gray-700">Rubrique:</span> {b.rubrique_code || "—"}</div>
-                  <div><span className="font-medium text-gray-700">Period:</span> {b.pay_period || "all"}</div>
-                  <div><span className="font-medium text-gray-700">Target:</span> {b.target_value || "all"}</div>
-                  <div><span className="font-medium text-gray-700">Status:</span> {b.status}</div>
-                  <div><span className="font-medium text-gray-700">Type:</span> {b.bonus_type}</div>
-                  <div><span className="font-medium text-gray-700">Percentage:</span> {b.is_percentage ? "Yes" : "No"}</div>
+                <div className="mt-3 border-t border-gray-100 pt-3">
+                  <div className="grid grid-cols-3 gap-2 text-xs text-gray-600 mb-3">
+                    <div><span className="font-medium text-gray-700">Rubrique:</span> {b.rubrique_code || "—"}</div>
+                    <div><span className="font-medium text-gray-700">Period:</span> {b.pay_period || "all"}</div>
+                    <div><span className="font-medium text-gray-700">Target:</span> {b.target_value || "all"}</div>
+                    <div><span className="font-medium text-gray-700">Status:</span> {b.status}</div>
+                    <div><span className="font-medium text-gray-700">Type:</span> {b.bonus_type}</div>
+                    <div><span className="font-medium text-gray-700">Percentage:</span> {b.is_percentage ? "Yes" : "No"}</div>
+                    <div><span className="font-medium text-gray-700">Recurrence:</span> {b.recurrence_type ?? "one_time"}{b.recurrence_count ? ` (${b.recurrence_count}x)` : ""}</div>
+                    <div><span className="font-medium text-gray-700">Cotisable:</span> {b.is_cotisable ? "Yes" : "No"}</div>
+                    <div><span className="font-medium text-gray-700">Imposable:</span> {b.is_imposable ? "Yes" : "No"}</div>
+                  </div>
+
+                  {editingId === b.id && (
+                    <div className="border-t border-gray-100 pt-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Title</label>
+                          <input value={editTitle} onChange={e => setEditTitle(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Amount</label>
+                          <input type="number" value={editAmount} onChange={e => setEditAmount(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Pay Period</label>
+                          <input type="month" value={editPayPeriod} onChange={e => setEditPayPeriod(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Recurrence</label>
+                          <select value={editRecurrence} onChange={e => setEditRecurrence(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                            <option value="one_time">One time</option>
+                            <option value="recurring">Recurring (N times)</option>
+                            <option value="permanent">Permanent</option>
+                          </select>
+                        </div>
+                        {editRecurrence === "recurring" && (
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Recurrence Count</label>
+                            <input type="number" value={editRecurrenceCount} onChange={e => setEditRecurrenceCount(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+                          </div>
+                        )}
+                        <div className="flex items-center gap-4">
+                          <label className="flex items-center gap-1.5 text-xs text-gray-700">
+                            <input type="checkbox" checked={editIsImposable} onChange={e => setEditIsImposable(e.target.checked)} />
+                            Imposable (IRG)
+                          </label>
+                          <label className="flex items-center gap-1.5 text-xs text-gray-700">
+                            <input type="checkbox" checked={editIsCotisable} onChange={e => setEditIsCotisable(e.target.checked)} />
+                            Cotisable (SS)
+                          </label>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button onClick={handleSaveEdit} disabled={!editTitle.trim() || savingEdit} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                          {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                          Save
+                        </button>
+                        <button onClick={cancelEdit} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -1,0 +1,20 @@
+Add Rubriques page, modern payroll rubriques, and payslip Base/Taux columns
+
+- New RubriquesPage: table with filters (classe, search, active-only),
+  inline editing (libelle, formule, flags), test formula button, create/delete
+- Backend: update_rubrique, delete_rubrique, test_rubrique_formula commands
+- Modern rubriques R960-R984: CNAS 2025 (9% salarie / 26% employeur detailles),
+  IRG 2025 with family reduction, prime d'anciennete, transport/panier modernises,
+  13eme mois, prime de bilan, indemnite licenciement
+- PayslipPDF: added Base and Taux columns using cd_nb_base/cd_taux metadata
+- CalcLine enriched with base_value/taux_value
+- RubriqueDef extended with cd_nb_base/cd_taux fields
+- Removed non-existent is_impo15 column from load_rubriques query
+- Sidebar: added Rubriques nav item, translated labels to French
+- EmployeesPage: advanced filters (contrat, classe, echelon, hire/exit dates)
+- Fixed Tauri 2.x camelCase/snake_case parameter naming mismatch
+- SKILLS.md: documented rubriques system, T[] parameters, regulatory context
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

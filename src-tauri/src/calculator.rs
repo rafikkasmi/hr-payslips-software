@@ -45,6 +45,8 @@ pub struct AppliedBonus {
     pub rubrique_code: Option<String>,
     pub is_percentage: bool,
     pub computed_amount: f64,
+    pub is_imposable: bool,
+    pub is_cotisable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,8 +57,8 @@ pub struct CalcResult {
     pub period: String,
     pub lines: Vec<CalcLine>,
     pub total_brut: f64,
-    total_gains: f64,
-    total_retenues: f64,
+    pub total_gains: f64,
+    pub total_retenues: f64,
     pub net_payer: f64,
     pub base_cotisable: f64,
     pub base_imposable: f64,
@@ -130,17 +132,18 @@ fn extract_base_taux(rub: &RubriqueDef, r_values: &HashMap<String, f64>) -> (Opt
 /// PCPAIE changed R099 handling in R655 starting from 09-2023.
 fn is_before_sep_2023(period: &str) -> bool {
     let p = period.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '-');
-    if p.contains('-') {
-        let parts: Vec<&str> = p.split('-').collect();
-        if parts.len() == 2 {
-            let mm: i32 = parts[0].parse().unwrap_or(0);
-            let yyyy: i32 = parts[1].parse().unwrap_or(0);
-            return yyyy < 2023 || (yyyy == 2023 && mm < 9);
+    // Try standard formats: MM-YYYY, YYYY-MM, or MMDDYY etc.
+    if let Some((year, month)) = parse_period(p) {
+        return year < 2023 || (year == 2023 && month < 9);
+    }
+    // Fallback for compact MMDDYYYY or MMDDYY without separators
+    if p.len() >= 6 && p.chars().all(|c: char| c.is_ascii_digit()) {
+        // MM followed by 4-digit year
+        if let (Ok(mm), Ok(yyyy)) = (p[..2].parse::<i32>(), p[2..6].parse::<i32>()) {
+            if (1..=12).contains(&mm) && yyyy >= 1000 {
+                return yyyy < 2023 || (yyyy == 2023 && mm < 9);
+            }
         }
-    } else if p.len() >= 6 && p.chars().all(|c| c.is_ascii_digit()) {
-        let mm: i32 = p[..2].parse().unwrap_or(0);
-        let yyyy: i32 = p[2..].parse().unwrap_or(0);
-        return yyyy < 2023 || (yyyy == 2023 && mm < 9);
     }
     false
 }
@@ -676,6 +679,11 @@ pub fn calculate_salary(
         }
     } else {
         effective_inputs = input_values.clone();
+        // Normalize keys: frontend may send "R026" while rubrique codes are "026"
+        effective_inputs = effective_inputs
+            .into_iter()
+            .map(|(k, v)| (k.trim_start_matches('R').to_string(), v))
+            .collect();
     }
 
     // Load overtime for this period and inject as input values
@@ -738,10 +746,12 @@ pub fn calculate_salary(
                 row.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0, // is_percentage
                 row.get::<_, Option<String>>(4)?, // rubrique_code
                 row.get::<_, String>(5)?,    // bonus_type
+                row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0, // is_imposable
+                row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0, // is_cotisable
             ))
         }).map_err(|e| e.to_string())?;
         for bonus_row in bonus_rows {
-            if let Ok((bid, btitle, bamount, bpercent, brub_code, btype)) = bonus_row {
+            if let Ok((bid, btitle, bamount, bpercent, brub_code, btype, b_imposable, b_cotisable)) = bonus_row {
                 if let Some(ref rub_code) = brub_code {
                     let numeric_code: String = rub_code.trim_start_matches('R').to_string();
                     let computed = if bpercent {
@@ -764,6 +774,8 @@ pub fn calculate_salary(
                         rubrique_code: brub_code,
                         is_percentage: bpercent,
                         computed_amount: computed,
+                        is_imposable: b_imposable,
+                        is_cotisable: b_cotisable,
                     });
                 }
             }
@@ -852,10 +864,10 @@ pub fn calculate_salary(
     let t10 = *t_values.get(&10).unwrap_or(&173.33);
     t_values.insert(78, if t09 != 0.0 { t10 / t09 } else { 0.0 });
 
-    // Load employee-specific input values from last payslip
-    // In PCPAIE, rubriques listed in employee_rubriques are employee-specific inputs
-    // stored in montants. These override formulas (e.g., R291=18650 even though formula is R[290]*R[200])
-    // Also load manual/no-formula rubriques from montants.
+    // Load employee-specific input values from TOT-PAIE (PCPAIE's employee template),
+    // falling back to the last monthly payslip if TOT-PAIE doesn't exist.
+    // TOT-PAIE contains the employee's default/persistent rubrique values (R531, R290, etc.)
+    // while monthly payslips may have different values due to prorata or one-off changes.
     
     // Get employee-specific rubrique codes
     let mut emp_rub_codes: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -872,49 +884,74 @@ pub fn calculate_salary(
         }
     }
     
-    if let Ok(last_base) = conn.query_row(
+    // Prefer TOT-PAIE for persistent employee values, fall back to last monthly payslip
+    let template_montants: Option<String> = conn.query_row(
+        "SELECT montants FROM paies WHERE employee_id=? AND mois='TOT-PAIE' LIMIT 1",
+        [employee_id],
+        |r| r.get::<_, Option<String>>(0),
+    ).unwrap_or(None);
+    
+    let last_montants: Option<String> = conn.query_row(
         "SELECT montants FROM paies WHERE employee_id=? AND mois != 'TOT-PAIE' AND mois != ? ORDER BY CAST(SUBSTR(mois, 4) AS INTEGER) DESC, CAST(SUBSTR(mois, 1, 2) AS INTEGER) DESC LIMIT 1",
         rusqlite::params![employee_id, period],
         |r| r.get::<_, Option<String>>(0),
-    ) {
-        if let Some(montants) = last_base {
-            // First pass: load all R values to compute T[76] ratio
-            let mut all_r: HashMap<String, f64> = HashMap::new();
-            for line in montants.lines() {
+    ).unwrap_or(None);
+    
+    // Use TOT-PAIE as primary source, last monthly as fallback for missing rubriques
+    let base_montants = template_montants.clone().or(last_montants.clone());
+    let fallback_montants = if template_montants.is_some() { last_montants } else { None };
+    
+    if let Some(montants) = base_montants {
+        // First pass: load all R values to compute T[76] ratio
+        let mut all_r: HashMap<String, f64> = HashMap::new();
+        for line in montants.lines() {
+            let line = line.trim();
+            if line.starts_with('R') && line.len() > 4 {
+                let code_str: String = line.chars().skip(1).take(3).collect();
+                let val_str: String = line.chars().skip(4).collect();
+                if let Ok(val) = val_str.trim().parse::<f64>() {
+                    let key = format!("{:03}", code_str.parse::<i64>().unwrap_or(0));
+                    all_r.insert(key, val);
+                }
+            }
+        }
+        // Merge fallback montants for rubriques not in TOT-PAIE
+        if let Some(ref fb) = fallback_montants {
+            for line in fb.lines() {
                 let line = line.trim();
                 if line.starts_with('R') && line.len() > 4 {
                     let code_str: String = line.chars().skip(1).take(3).collect();
                     let val_str: String = line.chars().skip(4).collect();
                     if let Ok(val) = val_str.trim().parse::<f64>() {
                         let key = format!("{:03}", code_str.parse::<i64>().unwrap_or(0));
-                        all_r.insert(key, val);
+                        all_r.entry(key).or_insert(val);
                     }
                 }
             }
-            // T[76] = 1.0 (no SS cap for new months, not loaded from history)
-            // Second pass: load PERSISTENT employee-specific rubriques AND manual rubriques from history
-            // Monthly input rubriques (absences, conges, acomptes) reset to 0 for new months
-            // unless provided via input_values
-            let monthly_input_codes: std::collections::HashSet<&str> = [
-                "033", "060", "065", "089", "099", "100", "110",
-                "340", "380", "523", "550", "620", "720",
-            ].iter().copied().collect();
-            for rub in &rubriques {
-                let code = &rub.code;
-                if code == "050" { continue; }
-                if monthly_input_codes.contains(code.as_str()) { continue; }
-                // Pre-load ALL rubriques from last payslip as initial values.
-                // Formula-based rubriques will be overwritten when their ord_clc is reached,
-                // but this makes their previous values available to earlier rubriques
-                // that reference them (e.g. R005 at ord_clc=500 references R291 at ord_clc=29100).
-                if let Some(&val) = all_r.get(code) {
-                    r_values.insert(code.clone(), val);
-                }
+        }
+        // T[76] = 1.0 (no SS cap for new months, not loaded from history)
+        // Second pass: load PERSISTENT employee-specific rubriques AND manual rubriques from history
+        // Monthly input rubriques (absences, conges, acomptes) reset to 0 for new months
+        // unless provided via input_values
+        let monthly_input_codes: std::collections::HashSet<&str> = [
+            "033", "060", "065", "089", "099", "100", "110",
+            "340", "380", "523", "550", "620", "720",
+        ].iter().copied().collect();
+        for rub in &rubriques {
+            let code = &rub.code;
+            if code == "050" { continue; }
+            if monthly_input_codes.contains(code.as_str()) { continue; }
+            // Pre-load ALL rubriques from template as initial values.
+            // Formula-based rubriques will be overwritten when their ord_clc is reached,
+            // but this makes their previous values available to earlier rubriques
+            // that reference them (e.g. R005 at ord_clc=500 references R291 at ord_clc=29100).
+            if let Some(&val) = all_r.get(code) {
+                r_values.insert(code.clone(), val);
             }
-            // Set T[07] from R001 (base salary)
-            if let Some(&r001) = all_r.get("001") {
-                t_values.insert(7, r001);
-            }
+        }
+        // Set T[07] from R001 (base salary)
+        if let Some(&r001) = all_r.get("001") {
+            t_values.insert(7, r001);
         }
     }
 
@@ -1058,6 +1095,24 @@ pub fn calculate_salary(
         // Before R500: compute T[76] = (T[01] - R050) / T[01]
         // All cotisable gains (R030, R112, R291 at ord 30xxx) are accumulated by this point
         if code == "500" {
+            // Correct T[01] and T[58] for bonus is_cotisable flags that differ from rubrique flags
+            for ab in &applied_bonuses {
+                if let Some(ref rub_code) = ab.rubrique_code {
+                    let numeric_code = rub_code.trim_start_matches('R').to_string();
+                    if let Some(rub) = rubriques.iter().find(|r| r.code == numeric_code) {
+                        let amt = ab.computed_amount;
+                        let rub_cotisable = rub.is_secu_s;
+                        if ab.is_cotisable && !rub_cotisable {
+                            *t_values.entry(1).or_insert(0.0) += amt;
+                            *t_values.entry(58).or_insert(0.0) += amt;
+                        } else if !ab.is_cotisable && rub_cotisable {
+                            *t_values.entry(1).or_insert(0.0) -= amt;
+                            *t_values.entry(58).or_insert(0.0) -= amt;
+                        }
+                    }
+                }
+            }
+
             let t01 = *t_values.get(&1).unwrap_or(&0.0);
             let r050 = *r_values.get("050").unwrap_or(&0.0);
             if t01 != 0.0 {
@@ -1065,7 +1120,39 @@ pub fn calculate_salary(
             }
         }
 
-        // Before R655: set T[15] to prorata value for IRG coefficient
+        // Before R652: correct T[43] for bonus is_imposable flags that differ from rubrique flags
+        if code == "652" {
+            for ab in &applied_bonuses {
+                if let Some(ref rub_code) = ab.rubrique_code {
+                    let numeric_code = rub_code.trim_start_matches('R').to_string();
+                    if let Some(rub) = rubriques.iter().find(|r| r.code == numeric_code) {
+                        let amt = ab.computed_amount;
+                        let rub_imposable = rub.is_impos;
+                        if ab.is_imposable && !rub_imposable {
+                            if !rub.is_regular {
+                                *t_values.entry(43).or_insert(0.0) += amt;
+                            } else {
+                                *t_values.entry(41).or_insert(0.0) += amt;
+                                *t_values.entry(57).or_insert(0.0) += amt;
+                            }
+                        } else if !ab.is_imposable && rub_imposable {
+                            if !rub.is_regular {
+                                *t_values.entry(43).or_insert(0.0) -= amt;
+                            } else {
+                                *t_values.entry(41).or_insert(0.0) -= amt;
+                                *t_values.entry(57).or_insert(0.0) -= amt;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Before R655: set T[09]=R026 and T[78]=T[10]/R026 so the formula
+        // handles absences correctly via R[033]*T[78].
+        // T[15] stays at 1.0 (reset after R206) — do NOT prorata it by R026/T09,
+        // that would double-count the prorata since the formula already subtracts
+        // R[033]*T[78] from T[10].
         if code == "655" {
             let r026_val = *r_values.get("026").unwrap_or(&0.0);
             let r099_val = *r_values.get("099").unwrap_or(&0.0);
@@ -1077,19 +1164,6 @@ pub fn calculate_salary(
             let is_conge_payslip = period.ends_with('O');
             let is_pre_sep_2023 = is_before_sep_2023(period);
             let r099_included = r060_val != 0.0 || is_conge_payslip || is_pre_sep_2023;
-            if is_conge_payslip && r026_val == 0.0 {
-                // Congé payslips with no worked days: T[15]=1.0
-                t_values.insert(15, 1.0);
-            } else if (r026_val - t09_orig_stored).abs() > 0.001 {
-                // T[15] = R026 / T09 (prorata coefficient)
-                // When R026 is fractional (e.g. 19.09 = hours-based), PCPAIE uses T09=30.
-                // When R026 is an integer (actual worked days), PCPAIE uses T09=nbr_jr_ouv.
-                let is_integer_r026 = (r026_val - r026_val.round()).abs() < 0.01;
-                let t09_for_t15 = if is_integer_r026 { t09_orig_stored } else { 30.0 };
-                t_values.insert(15, if t09_for_t15 != 0.0 { r026_val / t09_for_t15 } else { 1.0 });
-            } else {
-                t_values.insert(15, 1.0);
-            }
             // Zero R099 in the formula for post-Sep-2023 regular payslips with R060=0
             r099_orig_for_655 = r099_val;
             if !r099_included {
@@ -1214,17 +1288,10 @@ pub fn calculate_salary(
             t09_orig_stored = *t_values.get(&9).unwrap_or(&30.0);
             t_values.insert(15, 1.0);
         }
-        // After R030: set T[15] for R200/R205/R206 (prorata coefficient)
-        if code == "030" {
-            let r026_val = *r_values.get("026").unwrap_or(&0.0);
-            let r099_val = *r_values.get("099").unwrap_or(&0.0);
-            if (r026_val - t09_orig_stored).abs() > 0.001 {
-                let denom = t09_orig_stored + r099_val;
-                t_values.insert(15, if denom != 0.0 { r026_val / denom } else { 1.0 });
-            } else {
-                t_values.insert(15, 1.0);
-            }
-        }
+        // After R030: T[15] stays 1.0 (set after R026).
+        // PCPAIE does NOT set T[15]=R026/T09 here. The prorata is handled
+        // by the R200 formula itself via R033*T[78] subtraction.
+        // Setting T[15]=R026/T09 would double-count the prorata.
         // After R206: reset T[15]=1.0 for R250 and subsequent rubriques
         if code == "206" {
             t_values.insert(15, 1.0);
@@ -1242,12 +1309,33 @@ pub fn calculate_salary(
 
     // Extract totals from R values (matching PCPAIE output)
     let total_brut = r_values.get("763").copied().unwrap_or(0.0);
-    let total_gains = r_values.get("765").copied().unwrap_or(0.0);
-    let total_retenues = r_values.get("767").copied().unwrap_or(0.0);
+
+    // Recompute total_gains and total_retenues from actual lines.
+    // R765/R767 rely on T[03]/T[04] which only accumulate rubriques with is_total=1.
+    // Manual rubriques (bonuses, advances, loan repayments) may not have is_total set correctly,
+    // causing totals to be wrong. Summing from lines is always accurate.
+    // Also, some deductions (R034 absence) are classe 1 with negative amounts — they show
+    // as retenues in the payslip and must be counted there, not as negative gains.
+    let mut computed_gains: f64 = 0.0;
+    let mut computed_retenues: f64 = 0.0;
+    for line in &lines {
+        if line.classe == 2.0 && line.amount != 0.0 {
+            computed_retenues += line.amount.abs();
+        } else if line.classe == 1.0 {
+            if line.amount > 0.0 {
+                computed_gains += line.amount;
+            } else if line.amount < 0.0 {
+                computed_retenues += line.amount.abs();
+            }
+        }
+    }
+    let total_gains = computed_gains;
+    let total_retenues = computed_retenues;
+
     let base_cotisable = r_values.get("500").copied().unwrap_or(0.0);
     let base_imposable = r_values.get("652").copied().unwrap_or(0.0);
     let irg = r_values.get("660").copied().unwrap_or(0.0);
-    let net_payer = r_values.get("770").copied().unwrap_or(total_gains - total_retenues);
+    let net_payer = total_gains - total_retenues;
 
     Ok(CalcResult {
         employee_id,
@@ -1278,21 +1366,23 @@ fn accumulate_t(
     }
 
     // For retenues (classe==2): subtract from cotisable/imposable
+    // Use abs() because manual deductions (R1001, R724) may be stored as negative amounts
     if rub.classe == 2.0 {
-        *t_values.entry(4).or_insert(0.0) += amount; // T[04] = total retenues
+        let abs_amount = amount.abs();
+        *t_values.entry(4).or_insert(0.0) += abs_amount; // T[04] = total retenues
         if rub.is_brut {
-            *t_values.entry(52).or_insert(0.0) -= amount; // T[52] -= brut retenue
+            *t_values.entry(52).or_insert(0.0) -= abs_amount; // T[52] -= brut retenue
         }
         if rub.is_secu_s && !rub.is_regular {
-            *t_values.entry(1).or_insert(0.0) -= amount; // T[01] -= cotisable retenue (monthly)
-            *t_values.entry(58).or_insert(0.0) -= amount; // T[58] -= cotisable for IRG (monthly)
+            *t_values.entry(1).or_insert(0.0) -= abs_amount; // T[01] -= cotisable retenue (monthly)
+            *t_values.entry(58).or_insert(0.0) -= abs_amount; // T[58] -= cotisable for IRG (monthly)
         }
         if rub.is_impos {
             if !rub.is_regular {
-                *t_values.entry(43).or_insert(0.0) -= amount; // T[43] -= imposable (monthly)
+                *t_values.entry(43).or_insert(0.0) -= abs_amount; // T[43] -= imposable (monthly)
             } else {
-                *t_values.entry(41).or_insert(0.0) -= amount; // T[41] -= imposable for régul
-                *t_values.entry(57).or_insert(0.0) -= amount; // T[57] -= cotisable for régul
+                *t_values.entry(41).or_insert(0.0) -= abs_amount; // T[41] -= imposable for régul
+                *t_values.entry(57).or_insert(0.0) -= abs_amount; // T[57] -= cotisable for régul
             }
         }
         return;

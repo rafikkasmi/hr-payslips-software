@@ -1,18 +1,27 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { api, type AppStatus } from "./lib/api";
 import { SetupWizard } from "./components/SetupWizard";
 import { Sidebar, type Page } from "./components/Sidebar";
-import { EmployeesPage } from "./components/EmployeesPage";
-import { ShiftsPage } from "./components/ShiftsPage";
-import { PointeusePage } from "./components/PointeusePage";
-import { LeavesPage } from "./components/LeavesPage";
-import { BonusesPage } from "./components/BonusesPage";
-import { SalaryPage } from "./components/SalaryPage";
-import { AttendancePage } from "./components/AttendancePage";
-import { DashboardPage } from "./components/DashboardPage";
-import { PostesPage } from "./components/PostesPage";
-import { RubriquesPage } from "./components/RubriquesPage";
-import { SettingsPage } from "./components/SettingsPage";
+
+const EmployeesPage = lazy(() => import("./components/EmployeesPage").then(m => ({ default: m.EmployeesPage })));
+const ShiftsPage = lazy(() => import("./components/ShiftsPage").then(m => ({ default: m.ShiftsPage })));
+const PointeusePage = lazy(() => import("./components/PointeusePage").then(m => ({ default: m.PointeusePage })));
+const LeavesPage = lazy(() => import("./components/LeavesPage").then(m => ({ default: m.LeavesPage })));
+const BonusesPage = lazy(() => import("./components/BonusesPage").then(m => ({ default: m.BonusesPage })));
+const SalaryPage = lazy(() => import("./components/SalaryPage").then(m => ({ default: m.SalaryPage })));
+const AttendancePage = lazy(() => import("./components/AttendancePage").then(m => ({ default: m.AttendancePage })));
+const DashboardPage = lazy(() => import("./components/DashboardPage").then(m => ({ default: m.DashboardPage })));
+const PostesPage = lazy(() => import("./components/PostesPage").then(m => ({ default: m.PostesPage })));
+const RubriquesPage = lazy(() => import("./components/RubriquesPage").then(m => ({ default: m.RubriquesPage })));
+const SettingsPage = lazy(() => import("./components/SettingsPage").then(m => ({ default: m.SettingsPage })));
+
+function PageLoader() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-3 border-blue-600 border-t-transparent" />
+    </div>
+  );
+}
 
 function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -53,17 +62,19 @@ function App() {
     <div className="flex h-screen bg-gray-50">
       <Sidebar currentPage={page} onNavigate={setPage} />
       <main className="flex-1 overflow-auto">
-        {page === "dashboard" && <DashboardPage status={status} />}
-        {page === "employees" && <EmployeesPage />}
-        {page === "postes" && <PostesPage />}
-        {page === "rubriques" && <RubriquesPage />}
-        {page === "shifts" && <ShiftsPage />}
-        {page === "pointeuse" && <PointeusePage />}
-        {page === "attendance" && <AttendancePage />}
-        {page === "leaves" && <LeavesPage />}
-        {page === "bonuses" && <BonusesPage />}
-        {page === "salary" && <SalaryPage />}
-        {page === "settings" && <SettingsPage />}
+        <Suspense fallback={<PageLoader />}>
+          {page === "dashboard" && <DashboardPage status={status} />}
+          {page === "employees" && <EmployeesPage />}
+          {page === "postes" && <PostesPage />}
+          {page === "rubriques" && <RubriquesPage />}
+          {page === "shifts" && <ShiftsPage />}
+          {page === "pointeuse" && <PointeusePage />}
+          {page === "attendance" && <AttendancePage />}
+          {page === "leaves" && <LeavesPage />}
+          {page === "bonuses" && <BonusesPage />}
+          {page === "salary" && <SalaryPage />}
+          {page === "settings" && <SettingsPage />}
+        </Suspense>
       </main>
     </div>
   );
