@@ -1,7 +1,7 @@
-import { LayoutDashboard, Users, Clock, Fingerprint, CalendarOff, Gift, Calculator, Settings, Briefcase, ListChecks } from "lucide-react";
+import { LayoutDashboard, Users, Clock, Fingerprint, CalendarOff, Gift, Calculator, Settings, Briefcase, ListChecks, Zap } from "lucide-react";
 import { cn } from "../lib/utils";
 
-export type Page = "dashboard" | "employees" | "postes" | "rubriques" | "shifts" | "pointeuse" | "attendance" | "leaves" | "bonuses" | "salary" | "settings";
+export type Page = "dashboard" | "employees" | "postes" | "rubriques" | "simulator" | "shifts" | "pointeuse" | "attendance" | "leaves" | "bonuses" | "salary" | "settings";
 
 interface SidebarProps {
   currentPage: Page;
@@ -13,6 +13,7 @@ const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = 
   { page: "employees", label: "Employés", icon: Users },
   { page: "postes", label: "Profils de paie", icon: Briefcase },
   { page: "rubriques", label: "Rubriques", icon: ListChecks },
+  { page: "simulator", label: "Simulateur", icon: Zap },
   { page: "shifts", label: "Shifts", icon: Clock },
   { page: "pointeuse", label: "Pointeuse", icon: Fingerprint },
   { page: "attendance", label: "Présence", icon: CalendarOff },
