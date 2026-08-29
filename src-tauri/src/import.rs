@@ -548,25 +548,73 @@ fn parse_montants_for_seeding(montants: &str) -> std::collections::HashMap<Strin
     map
 }
 
-/// Seed postes by clustering employees with identical rubrique code sets.
-/// For each cluster, create a poste and extract fixed rubrique values from the
-/// latest payslip of the most representative employee (most payslip records).
+/// Seed postes from PCPAIE FNC lookup values and assign employees by sect1.
+/// For each FNC poste, rubrique defaults are seeded from the most representative employee.
 pub fn seed_postes(app: &Connection) -> Result<(), String> {
     use std::collections::{HashMap, BTreeSet};
 
-    // Get all employee rubrique codes grouped by employee
+    app.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+
+    // 1. Insert/update postes from FNC lookup values — ONLY for codes with employees
+    let mut fnc_codes: Vec<(String, String)> = Vec::new();
+    {
+        let mut stmt = app
+            .prepare(r#"SELECT l.code, l.libelle FROM lookup_values l
+                        WHERE l.table_name='FNC'
+                        AND EXISTS (SELECT 1 FROM employees e WHERE e.sect1 = l.code)
+                        ORDER BY l.code"#)
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            fnc_codes.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+
+    for (code, libelle) in &fnc_codes {
+        let name = if libelle.trim().is_empty() { code.clone() } else { libelle.trim().to_string() };
+        app.execute(
+            "INSERT OR REPLACE INTO postes (id, name, description, fnc_code, is_manual, updated_at) VALUES (
+                COALESCE((SELECT id FROM postes WHERE fnc_code=?), NULL),
+                ?, ?, ?, 0, datetime('now')
+            )",
+            rusqlite::params![code, name, code, code],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    // 2. Ensure fallback postes for unmapped employees
+    let fallback_unmapped = "FNC NON RENSEIGNE";
+    app.execute(
+        "INSERT OR IGNORE INTO postes (name, description, fnc_code, is_manual) VALUES (?, '', '', 0)",
+        [fallback_unmapped],
+    ).map_err(|e| e.to_string())?;
+    let unmapped_id: i64 = app.query_row(
+        "SELECT id FROM postes WHERE fnc_code='' AND is_manual=0",
+        [],
+        |r| r.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    // 3. Assign employees to postes via sect1
+    app.execute(
+        "UPDATE employees SET poste_id = (SELECT id FROM postes WHERE fnc_code = employees.sect1 LIMIT 1)",
+        [],
+    ).map_err(|e| e.to_string())?;
+    app.execute(
+        "UPDATE employees SET poste_id = ? WHERE poste_id IS NULL",
+        [unmapped_id],
+    ).map_err(|e| e.to_string())?;
+
+    // 4. Seed poste_rubriques per poste from representative employee
+    // Get all employee rubriques per employee
     let mut emp_rubriques: HashMap<i64, BTreeSet<String>> = HashMap::new();
     {
         let mut stmt = app
             .prepare("SELECT employee_id, rubrique_code FROM employee_rubriques")
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                ))
-            })
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
             .map_err(|e| e.to_string())?;
         for row in rows {
             let (emp_id, code) = row.map_err(|e| e.to_string())?;
@@ -574,11 +622,11 @@ pub fn seed_postes(app: &Connection) -> Result<(), String> {
         }
     }
 
-    // Pre-compute paies count per employee in ONE query (instead of per-cluster)
+    // Pre-compute paies count per employee
     let mut paies_count: HashMap<i64, i64> = HashMap::new();
     {
         let mut stmt = app
-            .prepare("SELECT employee_id, COUNT(*) as cnt FROM paies WHERE mois != 'TOT-PAIE' GROUP BY employee_id")
+            .prepare("SELECT employee_id, COUNT(*) as cnt FROM paies WHERE mois GLOB '[0-9][0-9]-[0-9][0-9][0-9][0-9]' GROUP BY employee_id")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
@@ -589,55 +637,55 @@ pub fn seed_postes(app: &Connection) -> Result<(), String> {
         }
     }
 
-    // Cluster employees by their rubrique set
-    let mut clusters: HashMap<BTreeSet<String>, Vec<i64>> = HashMap::new();
-    for (emp_id, rub_set) in &emp_rubriques {
-        clusters.entry(rub_set.clone()).or_default().push(*emp_id);
+    // Get employee IDs per poste
+    let mut poste_employees: HashMap<i64, Vec<i64>> = HashMap::new();
+    {
+        let mut stmt = app
+            .prepare("SELECT poste_id, id FROM employees WHERE poste_id IS NOT NULL ORDER BY poste_id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (poste_id, emp_id) = row.map_err(|e| e.to_string())?;
+            poste_employees.entry(poste_id).or_default().push(emp_id);
+        }
     }
 
-    // Sort clusters by size (largest first) for stable naming
-    let mut sorted_clusters: Vec<(BTreeSet<String>, Vec<i64>)> = clusters.into_iter().collect();
-    sorted_clusters.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-
-    // Begin transaction for batch inserts
-    app.execute_batch("BEGIN").map_err(|e| e.to_string())?;
-
-    // For each cluster, create a poste
-    for (idx, (rub_set, emp_ids)) in sorted_clusters.iter().enumerate() {
-        let poste_name = format!("Poste {}", idx + 1);
-        app.execute(
-            "INSERT INTO postes (name, description) VALUES (?, ?)",
-            rusqlite::params![poste_name, format!("Auto-derived poste with {} employees", emp_ids.len())],
-        )
-        .map_err(|e| e.to_string())?;
-        let poste_id = app.last_insert_rowid();
-
-        // Find the employee with the most payslip records in this cluster (from pre-computed map)
+    for (poste_id, emp_ids) in &poste_employees {
+        // Representative = employee with most payslip records
         let representative_emp = emp_ids
             .iter()
             .max_by_key(|id| paies_count.get(id).copied().unwrap_or(0))
             .copied()
             .unwrap_or(emp_ids[0]);
 
-        // Get the latest payslip for the representative employee
+        // Union of all rubriques from employees in this poste
+        let mut all_rubriques: BTreeSet<String> = BTreeSet::new();
+        for emp_id in emp_ids {
+            if let Some(set) = emp_rubriques.get(emp_id) {
+                all_rubriques.extend(set.iter().cloned());
+            }
+        }
+
+        // Get latest montants for representative
         let latest_montants: Option<String> = app
             .query_row(
-                "SELECT montants FROM paies WHERE employee_id=? AND mois != 'TOT-PAIE' ORDER BY mois DESC, c_date DESC LIMIT 1",
+                "SELECT montants FROM paies WHERE employee_id=? AND mois GLOB '[0-9][0-9]-[0-9][0-9][0-9][0-9]' ORDER BY mois DESC, c_date DESC LIMIT 1",
                 [representative_emp],
                 |r| r.get::<_, Option<String>>(0),
             )
             .ok()
             .flatten();
 
-        // Parse montants to get rubrique values
         let montant_values = if let Some(ref m) = latest_montants {
             parse_montants_for_seeding(m)
         } else {
             HashMap::new()
         };
 
-        // Insert poste_rubriques for all rubriques in the set
-        for (sort_idx, rub_code) in rub_set.iter().enumerate() {
+        // Insert poste_rubriques
+        for (sort_idx, rub_code) in all_rubriques.iter().enumerate() {
             let numeric_code: String = rub_code.chars().skip(1).collect();
             let default_value = montant_values.get(&numeric_code).copied().unwrap_or(0.0);
             app.execute(
@@ -646,15 +694,153 @@ pub fn seed_postes(app: &Connection) -> Result<(), String> {
             )
             .map_err(|e| e.to_string())?;
         }
+    }
 
-        // Batch-assign all employees in this cluster to the poste
-        for emp_id in emp_ids {
-            app.execute(
-                "UPDATE employees SET poste_id=? WHERE id=?",
-                rusqlite::params![poste_id, emp_id],
+    app.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Recompute cached statistics for all postes based on latest payslip per employee.
+/// Uses the parsed financial totals from paies.montants.
+pub fn recompute_all_poste_stats(app: &Connection) -> Result<(), String> {
+    use std::collections::HashMap;
+
+    // Latest paies per employee (excluding TOT-PAIE), with montants
+    let mut latest_paies: HashMap<i64, (String, String)> = HashMap::new(); // employee_id -> (mois, montants)
+    {
+        let mut stmt = app
+            .prepare(
+                "SELECT p1.employee_id, p1.mois, p1.montants
+                 FROM paies p1
+                 JOIN (
+                     SELECT employee_id, MAX(mois) as max_mois
+                     FROM paies
+                     WHERE mois GLOB '[0-9][0-9]-[0-9][0-9][0-9][0-9]'
+                     GROUP BY employee_id
+                 ) p2 ON p1.employee_id = p2.employee_id AND p1.mois = p2.max_mois
+                 WHERE p1.mois GLOB '[0-9][0-9]-[0-9][0-9][0-9][0-9]'"
             )
             .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (emp_id, mois, montants) = row.map_err(|e| e.to_string())?;
+            if let Some(m) = montants {
+                latest_paies.insert(emp_id, (mois, m));
+            }
         }
+    }
+
+    // Employees grouped by poste_id
+    let mut poste_employees: HashMap<i64, Vec<(i64, String, i64, Option<String>)>> = HashMap::new();
+    {
+        let mut stmt = app
+            .prepare("SELECT id, poste_id, dte_entree, actif FROM employees WHERE poste_id IS NOT NULL")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (emp_id, poste_id, dte_entree, actif) = row.map_err(|e| e.to_string())?;
+            if let Some(pid) = poste_id {
+                poste_employees
+                    .entry(pid)
+                    .or_default()
+                    .push((emp_id, dte_entree, actif.unwrap_or(0), None));
+            }
+        }
+    }
+
+    // Parse dates and compute stats
+    use chrono::{NaiveDate, Utc};
+    fn parse_date(s: &str) -> Option<NaiveDate> {
+        // Try yyyymmdd first, then dd/mm/yyyy
+        let s = s.trim();
+        if s.len() == 8 {
+            if let Ok(y) = s[0..4].parse::<i32>() {
+                if let Ok(m) = s[4..6].parse::<u32>() {
+                    if let Ok(d) = s[6..8].parse::<u32>() {
+                        return NaiveDate::from_ymd_opt(y, m, d);
+                    }
+                }
+            }
+        }
+        if s.len() == 10 && s.as_bytes()[2] == b'/' {
+            let parts: Vec<&str> = s.split('/').collect();
+            if parts.len() == 3 {
+                if let (Ok(d), Ok(m), Ok(y)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>(), parts[2].parse::<i32>()) {
+                    return NaiveDate::from_ymd_opt(y, m, d);
+                }
+            }
+        }
+        None
+    }
+
+    app.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+    app.execute("DELETE FROM poste_stats", []).map_err(|e| e.to_string())?;
+
+    for (poste_id, employees) in &poste_employees {
+        let count = employees.len();
+        let active_count = employees.iter().filter(|(_, _, actif, _)| *actif != 0).count();
+
+        let now = Utc::now().naive_utc();
+        let mut seniority_sum: f64 = 0.0;
+        let mut seniority_n: i64 = 0;
+        for (_, dte_entree, _, _) in employees {
+            if let Some(d) = parse_date(dte_entree) {
+                seniority_sum += (now.date() - d).num_days() as f64 / 365.25;
+                seniority_n += 1;
+            }
+        }
+        let avg_seniority = if seniority_n > 0 { seniority_sum / seniority_n as f64 } else { 0.0 };
+
+        let mut total_brut: f64 = 0.0;
+        let mut total_net: f64 = 0.0;
+        let mut total_n: i64 = 0;
+        let mut last_period: Option<String> = None;
+
+        for (emp_id, _, _, _) in employees {
+            if let Some((mois, montants)) = latest_paies.get(emp_id) {
+                let map = crate::parse_montants(montants);
+                let totals = crate::extract_totals_from_montants(&map);
+                total_brut += totals.0;
+                total_net += totals.1;
+                total_n += 1;
+                if last_period.is_none() || mois > last_period.as_ref().unwrap() {
+                    last_period = Some(mois.clone());
+                }
+            }
+        }
+        let avg_brut = if total_n > 0 { total_brut / total_n as f64 } else { 0.0 };
+
+        app.execute(
+            "INSERT INTO poste_stats (poste_id, employee_count, active_count, avg_seniority_years, total_brut, total_net, avg_brut, last_period, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            rusqlite::params![
+                poste_id,
+                count as i64,
+                active_count as i64,
+                avg_seniority,
+                total_brut,
+                total_net,
+                avg_brut,
+                last_period,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     app.execute_batch("COMMIT").map_err(|e| e.to_string())?;

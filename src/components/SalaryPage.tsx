@@ -2,6 +2,7 @@ import { useState, useEffect, Fragment } from "react";
 import { api, type CalcResult, type SalaryHistoryEntry, type HistoricalPayslip, type Bonus, type EmployeeSummary } from "../lib/api";
 import { formatCurrency } from "../lib/utils";
 import { PayslipPDF } from "./PayslipPDF";
+import { PeriodSelector } from "./PeriodSelector";
 import {
   Calculator, Calendar, Trash2, Loader2, ChevronDown, ChevronRight,
   DollarSign, History, Play, Plus, Gift, Search, Settings, Clock,
@@ -111,7 +112,7 @@ export function SalaryPage() {
       const p = await api.getAvailablePeriods();
       setPeriods(p);
       if (p.length > 0 && !selectedPeriod) {
-        setSelectedPeriod(p[p.length - 1]);
+        setSelectedPeriod(p[0]);
       }
     } catch (e) { console.error(e); }
   };
@@ -766,14 +767,11 @@ export function SalaryPage() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <Calendar className="h-5 w-5 text-gray-400" />
-            <select
-              value={selectedPeriod}
-              onChange={(e) => setSelectedPeriod(e.target.value)}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium"
-            >
-              {periods.length === 0 && <option value="">No periods yet</option>}
-              {periods.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+            <PeriodSelector
+              value={selectedPeriod || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`}
+              onChange={setSelectedPeriod}
+              availablePeriods={periods}
+            />
           </div>
 
           <button

@@ -6,6 +6,7 @@ mod native_import;
 mod pointeuse;
 
 use calculator::{calculate_salary, save_calculation, CalcResult};
+use chrono::Datelike;
 use import::{import_pcpaie, ImportResult};
 use pointeuse::{
     fuzzy_match_users_to_employees, import_pointeuse, link_pointeuse_to_employee,
@@ -18,18 +19,38 @@ use std::sync::Mutex;
 
 /// Parse a PAIES montants string into a map of rubrique_code -> amount.
 /// Format: lines like "R76370633.41000" where R + 3-digit code + amount
-fn parse_montants(montants: &str) -> HashMap<String, f64> {
+pub fn parse_montants(montants: &str) -> HashMap<String, f64> {
     let mut map = HashMap::new();
+    let mut is_first = true;
     for line in montants.lines() {
         let line = line.trim();
-        if !line.starts_with('R') || line.len() < 5 {
-            continue;
+        if line.is_empty() { continue; }
+        // First line is a header with NET/PRET and rubrique list; skip it
+        if is_first {
+            is_first = false;
+            if line.contains("NET") || line.contains("PRET") || line.contains("#") {
+                continue;
+            }
         }
-        let code_str: String = line.chars().skip(1).take(3).collect();
-        let val_str: String = line.chars().skip(4).collect();
-        if let Ok(val) = val_str.trim().parse::<f64>() {
-            if let Ok(n) = code_str.parse::<i64>() {
-                map.insert(format!("{:03}", n), val);
+        // Lines are like "R00141738.10000" or old format "00115000.0000"
+        // Format: optional R/N prefix, then 3-digit code, then value
+        let mut chars = line.chars();
+        let first = chars.next();
+        let rest = match first {
+            Some(c) if c.is_ascii_alphabetic() => chars.as_str(),
+            Some(_) => line,
+            None => continue,
+        };
+        if rest.len() < 3 { continue; }
+        let (code_part, value_part) = rest.split_at(3);
+        if let Ok(code_num) = code_part.parse::<u32>() {
+            let is_negative = first == Some('N');
+            let code = if is_negative { format!("N{:03}", code_num) } else { format!("R{:03}", code_num) };
+            let mut value_str = value_part.trim().replace(',', ".");
+            if value_str.ends_with('\u{0000}') { value_str = value_str.trim_end_matches('\u{0000}').to_string(); }
+            if let Ok(mut value) = value_str.parse::<f64>() {
+                if is_negative { value = -value; }
+                map.insert(code, value);
             }
         }
     }
@@ -38,13 +59,13 @@ fn parse_montants(montants: &str) -> HashMap<String, f64> {
 
 /// Extract financial totals from a parsed montants map.
 /// R763=brut, R770=net, R660=IRG, R767=retenues, R807=cotisable, R652=imposable
-fn extract_totals_from_montants(map: &HashMap<String, f64>) -> (f64, f64, f64, f64, f64, f64) {
-    let total_brut = *map.get("763").unwrap_or(&0.0);
-    let net_payer = *map.get("770").unwrap_or(&0.0);
-    let irg = *map.get("660").unwrap_or(&0.0);
-    let total_retenues = *map.get("767").unwrap_or(&0.0);
-    let base_cotisable = *map.get("807").unwrap_or(&0.0);
-    let base_imposable = *map.get("652").unwrap_or(&0.0);
+pub fn extract_totals_from_montants(map: &HashMap<String, f64>) -> (f64, f64, f64, f64, f64, f64) {
+    let total_brut = *map.get("R763").unwrap_or(&0.0);
+    let net_payer = *map.get("R770").unwrap_or(&0.0);
+    let irg = *map.get("R660").unwrap_or(&0.0);
+    let total_retenues = *map.get("R767").unwrap_or(&0.0);
+    let base_cotisable = *map.get("R807").unwrap_or(&0.0);
+    let base_imposable = *map.get("R652").unwrap_or(&0.0);
     (total_brut, net_payer, irg, total_retenues, base_cotisable, base_imposable)
 }
 use tauri::{Manager, State};
@@ -153,23 +174,163 @@ struct EmployeeSummary {
     section: Option<String>,
     structure: Option<String>,
     affectatio: Option<String>,
+    poste_name: Option<String>,
+    fnc_code: Option<String>,
+    sexe: Option<String>,
+    sit_fam: Option<String>,
+    categorie: Option<String>,
+    unite: Option<String>,
+    total_count: i64,
 }
 
 #[tauri::command]
-fn get_employees(state: State<AppState>) -> Result<Vec<EmployeeSummary>, String> {
+fn get_employees(
+    state: State<AppState>,
+    search: Option<String>,
+    actif_only: Option<bool>,
+    poste_id: Option<i64>,
+    section: Option<String>,
+    structure: Option<String>,
+    unite: Option<String>,
+    categorie: Option<String>,
+    sexe: Option<String>,
+    contrat: Option<String>,
+    echelon: Option<String>,
+    classe: Option<String>,
+    hire_date_from: Option<String>,
+    hire_date_to: Option<String>,
+    exit_date_from: Option<String>,
+    exit_date_to: Option<String>,
+    page: Option<i64>,
+    page_size: Option<i64>,
+) -> Result<Vec<EmployeeSummary>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            r#"SELECT e.id, e.matricule, e.nom, e.prenom, e.actif, e.pointeuse_pin,
-               s.name, e.section, e.structure, e.affectatio
-               FROM employees e
-               LEFT JOIN shifts s ON e.shift_id = s.id
-               ORDER BY e.nom, e.prenom"#,
-        )
-        .map_err(|e| e.to_string())?;
+    let page = page.unwrap_or(1).max(1);
+    let page_size = page_size.unwrap_or(50).min(500);
+    let offset = (page - 1) * page_size;
 
+    eprintln!("get_employees filters: actif_only={:?}, poste_id={:?}, sexe={:?}", actif_only, poste_id, sexe);
+
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(ref s) = search {
+        let s = s.trim();
+        if !s.is_empty() {
+            where_clauses.push("(e.nom LIKE ? OR e.prenom LIKE ? OR e.matricule LIKE ?)".to_string());
+            let pattern = format!("%{}%", s);
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern));
+        }
+    }
+    if actif_only.unwrap_or(false) {
+        where_clauses.push("e.actif = 1".to_string());
+    }
+    if let Some(pid) = poste_id {
+        where_clauses.push("e.poste_id = ?".to_string());
+        params.push(Box::new(pid));
+    }
+    if let Some(ref sec) = section {
+        if !sec.is_empty() {
+            where_clauses.push("e.section = ?".to_string());
+            params.push(Box::new(sec.clone()));
+        }
+    }
+    if let Some(ref stru) = structure {
+        if !stru.is_empty() {
+            where_clauses.push("e.structure = ?".to_string());
+            params.push(Box::new(stru.clone()));
+        }
+    }
+    if let Some(ref unt) = unite {
+        if !unt.is_empty() {
+            where_clauses.push("e.unite = ?".to_string());
+            params.push(Box::new(unt.clone()));
+        }
+    }
+    if let Some(ref cat) = categorie {
+        if !cat.is_empty() {
+            where_clauses.push("e.categorie = ?".to_string());
+            params.push(Box::new(cat.clone()));
+        }
+    }
+    if let Some(ref sx) = sexe {
+        if !sx.is_empty() {
+            where_clauses.push("e.sexe = ?".to_string());
+            params.push(Box::new(sx.clone()));
+        }
+    }
+    if let Some(ref ctr) = contrat {
+        if !ctr.is_empty() {
+            where_clauses.push("e.contrat = ?".to_string());
+            params.push(Box::new(ctr.clone()));
+        }
+    }
+    if let Some(ref ech) = echelon {
+        if !ech.is_empty() {
+            where_clauses.push("e.echelon = ?".to_string());
+            params.push(Box::new(ech.clone()));
+        }
+    }
+    if let Some(ref cls) = classe {
+        if !cls.is_empty() {
+            where_clauses.push("e.classe = ?".to_string());
+            params.push(Box::new(cls.clone()));
+        }
+    }
+    if let Some(ref hdf) = hire_date_from {
+        if !hdf.is_empty() {
+            where_clauses.push("e.dte_entree >= ?".to_string());
+            params.push(Box::new(hdf.clone()));
+        }
+    }
+    if let Some(ref hdt) = hire_date_to {
+        if !hdt.is_empty() {
+            where_clauses.push("e.dte_entree <= ?".to_string());
+            params.push(Box::new(hdt.clone()));
+        }
+    }
+    if let Some(ref edf) = exit_date_from {
+        if !edf.is_empty() {
+            where_clauses.push("e.dte_sortie >= ?".to_string());
+            params.push(Box::new(edf.clone()));
+        }
+    }
+    if let Some(ref edt) = exit_date_to {
+        if !edt.is_empty() {
+            where_clauses.push("e.dte_sortie <= ?".to_string());
+            params.push(Box::new(edt.clone()));
+        }
+    }
+
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+
+    let sql = format!(
+        r#"SELECT e.id, e.matricule, e.nom, e.prenom, e.actif, e.pointeuse_pin,
+           s.name, e.section, e.structure, e.affectatio,
+           p.name, p.fnc_code, e.sexe, e.sit_fam, e.categorie, e.unite,
+           COUNT(*) OVER () as total_count
+           FROM employees e
+           LEFT JOIN shifts s ON e.shift_id = s.id
+           LEFT JOIN postes p ON e.poste_id = p.id
+           {where_sql}
+           ORDER BY e.nom, e.prenom
+           LIMIT ? OFFSET ?"#,
+        where_sql = where_sql
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    params.push(Box::new(page_size));
+    params.push(Box::new(offset));
+
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p: &Box<dyn rusqlite::ToSql>| p.as_ref()).collect();
     let rows = stmt
-        .query_map([], |row| {
+        .query_map(param_refs.as_slice(), |row| {
             Ok(EmployeeSummary {
                 id: row.get(0)?,
                 matricule: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -181,6 +342,13 @@ fn get_employees(state: State<AppState>) -> Result<Vec<EmployeeSummary>, String>
                 section: row.get(7)?,
                 structure: row.get(8)?,
                 affectatio: row.get(9)?,
+                poste_name: row.get(10)?,
+                fnc_code: row.get(11)?,
+                sexe: row.get(12)?,
+                sit_fam: row.get(13)?,
+                categorie: row.get(14)?,
+                unite: row.get(15)?,
+                total_count: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -193,13 +361,87 @@ fn get_employees(state: State<AppState>) -> Result<Vec<EmployeeSummary>, String>
 }
 
 #[tauri::command]
-fn get_employee_detail(
-    state: State<AppState>,
+fn get_employee_filter_options(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let sections: Vec<String> = conn
+        .prepare("SELECT DISTINCT section FROM employees WHERE section IS NOT NULL AND section != '' ORDER BY section")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let structures: Vec<String> = conn
+        .prepare("SELECT DISTINCT structure FROM employees WHERE structure IS NOT NULL AND structure != '' ORDER BY structure")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let unites: Vec<String> = conn
+        .prepare("SELECT DISTINCT unite FROM employees WHERE unite IS NOT NULL AND unite != '' ORDER BY unite")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let categories: Vec<String> = conn
+        .prepare("SELECT DISTINCT categorie FROM employees WHERE categorie IS NOT NULL AND categorie != '' ORDER BY categorie")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let postes: Vec<(i64, String)> = conn
+        .prepare("SELECT id, name FROM postes ORDER BY name")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let contrats: Vec<String> = conn
+        .prepare("SELECT DISTINCT contrat FROM employees WHERE contrat IS NOT NULL AND contrat != '' ORDER BY contrat")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let echelons: Vec<String> = conn
+        .prepare("SELECT DISTINCT echelon FROM employees WHERE echelon IS NOT NULL AND echelon != '' ORDER BY echelon")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let classes: Vec<String> = conn
+        .prepare("SELECT DISTINCT classe FROM employees WHERE classe IS NOT NULL AND classe != '' ORDER BY classe")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(serde_json::json!({
+        "sections": sections,
+        "structures": structures,
+        "unites": unites,
+        "categories": categories,
+        "postes": postes.iter().map(|(id, name)| serde_json::json!({"id": id, "name": name})).collect::<Vec<_>>(),
+        "sexes": ["M", "F"],
+        "contrats": contrats,
+        "echelons": echelons,
+        "classes": classes,
+    }))
+}
+
+#[tauri::command]
+async fn get_employee_detail(
+    state: State<'_, AppState>,
     employee_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let row = conn
-        .query_row(
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+        let mut row = conn
+            .query_row(
             r#"SELECT e.id, e.matricule, e.nom, e.prenom, e.sit_fam, e.nbre_enf, e.naiss_date,
                e.dte_entree, e.dte_sortie, e.actif, e.sexe, e.no_grille, e.categorie, e.section,
                e.echelon, e.classe, e.structure, e.unite, e.affectatio, e.contrat, e.sect1,
@@ -239,7 +481,10 @@ fn get_employee_detail(
                e.conge_ok, e.notep, e.anotep,
                e.nbr_jr_ouv, e.nbr_hr_ouv, e.pret_obs1, e.pret_obs2,
                -- Count of children
-               (SELECT COUNT(*) FROM employee_children WHERE employee_id = e.id) as child_count
+               (SELECT COUNT(*) FROM employee_children WHERE employee_id = e.id) as child_count,
+               -- New lookup labels for missing fields
+               fnc.libelle, bnq.libelle, catsp.libelle, dip.libelle,
+               at1.libelle, at2.libelle, at3.libelle
                FROM employees e
                LEFT JOIN lookup_values unt ON unt.table_name='UNT' AND unt.code = e.unite
                LEFT JOIN lookup_values aff ON aff.table_name='AFF' AND aff.code = e.affectatio
@@ -247,6 +492,13 @@ fn get_employee_detail(
                LEFT JOIN lookup_values sec ON sec.table_name='SEC' AND sec.code = e.section
                LEFT JOIN lookup_values str ON str.table_name='SEC' AND str.code = e.structure
                LEFT JOIN lookup_values cat ON cat.table_name='CAT' AND cat.code = e.categorie
+               LEFT JOIN lookup_values fnc ON fnc.table_name='FNC' AND fnc.code = e.sect1
+               LEFT JOIN lookup_values bnq ON bnq.table_name='BNQ' AND bnq.code = e.org_payeur
+               LEFT JOIN lookup_values catsp ON catsp.table_name='CAT' AND catsp.code = e.categ_sp
+               LEFT JOIN lookup_values dip ON dip.table_name='DIP' AND dip.code = e.diplome
+               LEFT JOIN lookup_values at1 ON at1.table_name='AT1' AND at1.code = e.attrib1
+               LEFT JOIN lookup_values at2 ON at2.table_name='AT2' AND at2.code = e.attrib2
+               LEFT JOIN lookup_values at3 ON at3.table_name='AT3' AND at3.code = e.attrib3
                WHERE e.id=?"#,
             [employee_id],
             |r| {
@@ -337,10 +589,10 @@ fn get_employee_detail(
                 // PERS0 extra (new)
                 m.insert("nbr_enf_af".into(), r.get::<_, Option<f64>>(81)?.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
                 m.insert("nbr_prs_ch".into(), r.get::<_, Option<f64>>(82)?.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
-                m.insert("no_profil".into(), r.get::<_, Option<String>>(83)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("no_profil".into(), r.get::<_, Option<f64>>(83)?.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
                 m.insert("org_payeur".into(), r.get::<_, Option<String>>(84)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
                 m.insert("org_pemploy".into(), r.get::<_, Option<String>>(85)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
-                m.insert("cod_regl".into(), r.get::<_, Option<String>>(86)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("cod_regl".into(), r.get::<_, Option<f64>>(86)?.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
                 m.insert("mutu_dted".into(), r.get::<_, Option<String>>(87)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
                 m.insert("mutu_dtef".into(), r.get::<_, Option<String>>(88)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
                 m.insert("ok_intemp".into(), r.get::<_, Option<i64>>(89)?.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
@@ -391,11 +643,73 @@ fn get_employee_detail(
                 m.insert("pret_obs1".into(), r.get::<_, Option<String>>(131)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
                 m.insert("pret_obs2".into(), r.get::<_, Option<String>>(132)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
                 m.insert("child_count".into(), r.get::<_, Option<i64>>(133)?.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+                // New lookup labels
+                m.insert("fonction_libelle".into(), r.get::<_, Option<String>>(134)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("banque_libelle".into(), r.get::<_, Option<String>>(135)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("categ_sp_libelle".into(), r.get::<_, Option<String>>(136)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("diplome_libelle".into(), r.get::<_, Option<String>>(137)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("attrib1_libelle".into(), r.get::<_, Option<String>>(138)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("attrib2_libelle".into(), r.get::<_, Option<String>>(139)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                m.insert("attrib3_libelle".into(), r.get::<_, Option<String>>(140)?.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
                 Ok(serde_json::Value::Object(m))
             },
         )
         .map_err(|e| e.to_string())?;
-    Ok(row)
+
+        // Build mapped_fields from field_mappings configuration
+        let mut mapped_fields = Vec::new();
+        let mappings: Vec<(String, String, String, Option<String>, String, i64)> = {
+            let mut stmt = conn
+                .prepare("SELECT display_label, employee_column, logical_name, lookup_table, section, sort_order FROM field_mappings WHERE is_visible=1 ORDER BY section, sort_order")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |r| Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+            ))).map_err(|e| e.to_string())?;
+            let mut v = Vec::new();
+            for row in rows { v.push(row.map_err(|e| e.to_string())?); }
+            v
+        };
+
+        for (label, col, logical, lookup_table, section, order) in &mappings {
+            // Get raw value from employee
+            let sql = format!("SELECT {} FROM employees WHERE id=?", col);
+            let raw_val: Option<String> = conn.query_row(&sql, [employee_id], |r| r.get(0)).ok().flatten();
+            // Get lookup label if configured
+            let libelle = if let (Some(ref lt), Some(ref code)) = (lookup_table, &raw_val) {
+                if code.is_empty() || lt.is_empty() { None }
+                else {
+                    conn.query_row(
+                        "SELECT libelle FROM lookup_values WHERE table_name=? AND code=?",
+                        rusqlite::params![lt, code],
+                        |r| r.get::<_, String>(0),
+                    ).ok()
+                }
+            } else { None };
+
+            mapped_fields.push(serde_json::json!({
+                "logical_name": logical,
+                "label": label,
+                "column": col,
+                "lookup_table": lookup_table,
+                "section": section,
+                "sort_order": order,
+                "raw_value": raw_val,
+                "libelle": libelle,
+            }));
+        }
+        // Insert mapped_fields into the result
+        if let serde_json::Value::Object(ref mut m) = row {
+            m.insert("mapped_fields".into(), serde_json::Value::Array(mapped_fields));
+        }
+        Ok(row)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ============================================================
@@ -466,7 +780,7 @@ fn get_employee_loans(
 ) -> Result<Vec<serde_json::Value>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, matricule, code_rub, mois, date, libelle, montant, sens, no_pret FROM employee_loans WHERE matricule=? ORDER BY date DESC")
+        .prepare("SELECT id, matricule, code_rub, mois, date, libelle, montant, sens, no_pret FROM employee_loans WHERE matricule=? ORDER BY date DESC LIMIT 200")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([matricule], |r| {
@@ -495,7 +809,7 @@ fn get_employee_events(
 ) -> Result<Vec<serde_json::Value>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, matricule, libelle, alibelle, date, heure, codop FROM career_events WHERE matricule=? ORDER BY date DESC")
+        .prepare("SELECT id, matricule, libelle, alibelle, date, heure, codop FROM career_events WHERE matricule=? ORDER BY date DESC LIMIT 200")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([matricule], |r| {
@@ -639,6 +953,8 @@ fn get_salary_history(
     employee_id: i64,
 ) -> Result<Vec<serde_json::Value>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+
+    // First try calculated salary history
     let mut stmt = conn
         .prepare(
             r#"SELECT id, period, total_brut, total_gains, total_retenues, net_payer,
@@ -661,6 +977,7 @@ fn get_salary_history(
                 "irg": row.get::<_, f64>(8)?,
                 "status": row.get::<_, String>(9)?,
                 "calculated_at": row.get::<_, String>(10)?,
+                "source": "calculated",
             }))
         })
         .map_err(|e| e.to_string())?;
@@ -669,6 +986,39 @@ fn get_salary_history(
     for row in rows {
         results.push(row.map_err(|e| e.to_string())?);
     }
+
+    // Fallback to imported historical payslips if no calculations exist
+    if results.is_empty() {
+        let mut stmt = conn
+            .prepare("SELECT mois, montants FROM paies WHERE employee_id=? AND mois GLOB '[0-9][0-9]-[0-9][0-9][0-9][0-9]' ORDER BY mois DESC")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([employee_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            let (mois, montants) = row.map_err(|e| e.to_string())?;
+            let values = parse_montants(&montants);
+            let (total_brut, net_payer, irg, total_retenues, base_cotisable, base_imposable) = extract_totals_from_montants(&values);
+            results.push(serde_json::json!({
+                "id": -1,
+                "period": mois,
+                "total_brut": total_brut,
+                "total_gains": base_cotisable,
+                "total_retenues": total_retenues,
+                "net_payer": net_payer,
+                "base_cotisable": base_cotisable,
+                "base_imposable": base_imposable,
+                "irg": irg,
+                "status": "imported",
+                "calculated_at": null,
+                "source": "imported",
+            }));
+        }
+    }
+
     Ok(results)
 }
 
@@ -693,7 +1043,7 @@ fn get_leaves(state: State<AppState>, employee_id: Option<i64>) -> Result<Vec<Le
     if let Some(eid) = employee_id {
         let mut stmt = conn
             .prepare(
-                "SELECT id, employee_id, leave_type, start_date, end_date, days_count, reason, status FROM leaves WHERE employee_id=? ORDER BY start_date DESC",
+                "SELECT id, employee_id, leave_type, start_date, end_date, days_count, reason, status FROM leaves WHERE employee_id=? ORDER BY start_date DESC LIMIT 200",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -716,7 +1066,7 @@ fn get_leaves(state: State<AppState>, employee_id: Option<i64>) -> Result<Vec<Le
     } else {
         let mut stmt = conn
             .prepare(
-                "SELECT id, employee_id, leave_type, start_date, end_date, days_count, reason, status FROM leaves ORDER BY start_date DESC",
+                "SELECT id, employee_id, leave_type, start_date, end_date, days_count, reason, status FROM leaves ORDER BY start_date DESC LIMIT 200",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -802,7 +1152,7 @@ fn get_bonuses(state: State<AppState>) -> Result<Vec<Bonus>, String> {
             r#"SELECT id, title, description, bonus_type, amount, is_percentage,
                rubrique_code, target_type, target_value, pay_period, status,
                recurrence_type, recurrence_count, is_imposable, is_cotisable
-               FROM bonuses ORDER BY created_at DESC"#,
+               FROM bonuses ORDER BY created_at DESC LIMIT 200"#,
         )
         .map_err(|e| e.to_string())?;
 
@@ -1352,6 +1702,111 @@ fn create_rubrique(
     Ok(code_str)
 }
 
+#[tauri::command]
+fn update_rubrique(
+    state: State<AppState>,
+    code: String,
+    libelle: Option<String>,
+    formule: Option<String>,
+    classe: Option<f64>,
+    is_brut: Option<i64>,
+    is_impos: Option<i64>,
+    is_secu_s: Option<i64>,
+    is_total: Option<i64>,
+    is_imp: Option<i64>,
+    manuelle: Option<i64>,
+    init_val: Option<f64>,
+    ord_clc: Option<f64>,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut sets: Vec<String> = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(l) = libelle { sets.push("libelle = ?".into()); params.push(Box::new(l)); }
+    if let Some(f) = formule { sets.push("formule = ?".into()); params.push(Box::new(f)); }
+    if let Some(c) = classe { sets.push("classe = ?".into()); params.push(Box::new(c)); }
+    if let Some(v) = is_brut { sets.push("is_brut = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = is_impos { sets.push("is_impos = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = is_secu_s { sets.push("is_secu_s = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = is_total { sets.push("is_total = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = is_imp { sets.push("is_imp = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = manuelle { sets.push("manuelle = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = init_val { sets.push("init_val = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = ord_clc { sets.push("ord_clc = ?".into()); params.push(Box::new(v)); }
+
+    if sets.is_empty() {
+        return Ok(());
+    }
+    params.push(Box::new(code.clone()));
+    let sql = format!("UPDATE rubriques SET {} WHERE code = ?", sets.join(", "));
+    conn.execute(&sql, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_rubrique(
+    state: State<AppState>,
+    code: String,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    // Check if rubrique is used in employee_rubriques or poste_rubriques
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM employee_rubriques WHERE rubrique_code = ?",
+            [&code],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if count > 0 {
+        return Err(format!("Cette rubrique est utilisée par {} employé(s). Supprimez d'abord les affectations.", count));
+    }
+    conn.execute("DELETE FROM rubriques WHERE code = ?", [&code])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn test_rubrique_formula(
+    state: State<AppState>,
+    code: String,
+    formule: String,
+    employee_id: Option<i64>,
+    period: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let emp_id = employee_id.unwrap_or(1);
+    let period_str = period.unwrap_or_else(|| format!("{}-{:02}", chrono::Local::now().year(), chrono::Local::now().month()));
+
+    // Load all rubriques
+    let rubriques = calculator::load_rubriques(&conn)?;
+    let r_values: HashMap<String, f64> = rubriques
+        .iter()
+        .map(|r| (r.code.clone(), r.init_val))
+        .collect();
+
+    // Load T values (parameters) — use defaults
+    let t_values: HashMap<usize, f64> = HashMap::new();
+
+    // Try to evaluate the formula
+    let result = calculator::eval_formula_public(&formule, &r_values, &t_values, 0.0, 0.0, &period_str);
+
+    match result {
+        Ok(val) => Ok(serde_json::json!({
+            "success": true,
+            "value": val,
+            "formula": formule,
+            "code": code,
+        })),
+        Err(e) => Ok(serde_json::json!({
+            "success": false,
+            "error": e,
+            "formula": formule,
+            "code": code,
+        })),
+    }
+}
+
 // Lookup values (departments, regions, areas)
 #[tauri::command]
 fn get_lookup_values(
@@ -1489,99 +1944,113 @@ fn delete_month_calculations(state: State<AppState>, period: String) -> Result<u
 }
 
 // Get salary history for all employees (or filtered by period)
+// Optimized: filters in SQL, uses LIMIT, runs in spawn_blocking to avoid Mutex contention
 #[tauri::command]
-fn get_all_salary_history(
-    state: State<AppState>,
+async fn get_all_salary_history(
+    state: State<'_, AppState>,
     period: Option<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let mut results = Vec::new();
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA busy_timeout=5000;").ok();
+        let mut results = Vec::new();
 
-    // New calculations from our app
-    if let Some(ref p) = period {
-        let mut stmt = conn
-            .prepare(r#"SELECT sc.id, sc.employee_id, sc.period, sc.matricule, sc.total_brut,
-                       sc.total_gains, sc.total_retenues, sc.net_payer, sc.base_cotisable,
-                       sc.base_imposable, sc.irg, sc.status, sc.calculated_at,
-                       e.nom, e.prenom
-                       FROM salary_calculations sc
-                       LEFT JOIN employees e ON sc.employee_id = e.id
-                       WHERE sc.period=? ORDER BY e.nom, e.prenom"#)
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([&p], |row| {
-                Ok(serde_json::json!({
-                    "id": row.get::<_, i64>(0)?,
-                    "employee_id": row.get::<_, Option<i64>>(1)?,
-                    "period": row.get::<_, String>(2)?,
-                    "matricule": row.get::<_, Option<String>>(3)?,
-                    "total_brut": row.get::<_, f64>(4)?,
-                    "total_gains": row.get::<_, f64>(5)?,
-                    "total_retenues": row.get::<_, f64>(6)?,
-                    "net_payer": row.get::<_, f64>(7)?,
-                    "base_cotisable": row.get::<_, f64>(8)?,
-                    "base_imposable": row.get::<_, f64>(9)?,
-                    "irg": row.get::<_, f64>(10)?,
-                    "status": row.get::<_, String>(11)?,
-                    "calculated_at": row.get::<_, String>(12)?,
-                    "nom": row.get::<_, Option<String>>(13)?,
-                    "prenom": row.get::<_, Option<String>>(14)?,
-                    "source": "app",
-                }))
-            })
-            .map_err(|e| e.to_string())?;
-        for row in rows {
-            results.push(row.map_err(|e| e.to_string())?);
+        // New calculations from our app
+        if let Some(ref p) = period {
+            let mut stmt = conn
+                .prepare(r#"SELECT sc.id, sc.employee_id, sc.period, sc.matricule, sc.total_brut,
+                           sc.total_gains, sc.total_retenues, sc.net_payer, sc.base_cotisable,
+                           sc.base_imposable, sc.irg, sc.status, sc.calculated_at,
+                           e.nom, e.prenom
+                           FROM salary_calculations sc
+                           LEFT JOIN employees e ON sc.employee_id = e.id
+                           WHERE sc.period=? ORDER BY e.nom, e.prenom LIMIT 500"#)
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([&p], |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, i64>(0)?,
+                        "employee_id": row.get::<_, Option<i64>>(1)?,
+                        "period": row.get::<_, String>(2)?,
+                        "matricule": row.get::<_, Option<String>>(3)?,
+                        "total_brut": row.get::<_, f64>(4)?,
+                        "total_gains": row.get::<_, f64>(5)?,
+                        "total_retenues": row.get::<_, f64>(6)?,
+                        "net_payer": row.get::<_, f64>(7)?,
+                        "base_cotisable": row.get::<_, f64>(8)?,
+                        "base_imposable": row.get::<_, f64>(9)?,
+                        "irg": row.get::<_, f64>(10)?,
+                        "status": row.get::<_, String>(11)?,
+                        "calculated_at": row.get::<_, String>(12)?,
+                        "nom": row.get::<_, Option<String>>(13)?,
+                        "prenom": row.get::<_, Option<String>>(14)?,
+                        "source": "app",
+                    }))
+                })
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                results.push(row.map_err(|e| e.to_string())?);
+            }
+        } else {
+            let mut stmt = conn
+                .prepare(r#"SELECT sc.id, sc.employee_id, sc.period, sc.matricule, sc.total_brut,
+                           sc.total_gains, sc.total_retenues, sc.net_payer, sc.base_cotisable,
+                           sc.base_imposable, sc.irg, sc.status, sc.calculated_at,
+                           e.nom, e.prenom
+                           FROM salary_calculations sc
+                           LEFT JOIN employees e ON sc.employee_id = e.id
+                           ORDER BY sc.period DESC, e.nom, e.prenom LIMIT 500"#)
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, i64>(0)?,
+                        "employee_id": row.get::<_, Option<i64>>(1)?,
+                        "period": row.get::<_, String>(2)?,
+                        "matricule": row.get::<_, Option<String>>(3)?,
+                        "total_brut": row.get::<_, f64>(4)?,
+                        "total_gains": row.get::<_, f64>(5)?,
+                        "total_retenues": row.get::<_, f64>(6)?,
+                        "net_payer": row.get::<_, f64>(7)?,
+                        "base_cotisable": row.get::<_, f64>(8)?,
+                        "base_imposable": row.get::<_, f64>(9)?,
+                        "irg": row.get::<_, f64>(10)?,
+                        "status": row.get::<_, String>(11)?,
+                        "calculated_at": row.get::<_, String>(12)?,
+                        "nom": row.get::<_, Option<String>>(13)?,
+                        "prenom": row.get::<_, Option<String>>(14)?,
+                        "source": "app",
+                    }))
+                })
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                results.push(row.map_err(|e| e.to_string())?);
+            }
         }
-    } else {
-        let mut stmt = conn
-            .prepare(r#"SELECT sc.id, sc.employee_id, sc.period, sc.matricule, sc.total_brut,
-                       sc.total_gains, sc.total_retenues, sc.net_payer, sc.base_cotisable,
-                       sc.base_imposable, sc.irg, sc.status, sc.calculated_at,
-                       e.nom, e.prenom
-                       FROM salary_calculations sc
-                       LEFT JOIN employees e ON sc.employee_id = e.id
-                       ORDER BY sc.period DESC, e.nom, e.prenom"#)
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(serde_json::json!({
-                    "id": row.get::<_, i64>(0)?,
-                    "employee_id": row.get::<_, Option<i64>>(1)?,
-                    "period": row.get::<_, String>(2)?,
-                    "matricule": row.get::<_, Option<String>>(3)?,
-                    "total_brut": row.get::<_, f64>(4)?,
-                    "total_gains": row.get::<_, f64>(5)?,
-                    "total_retenues": row.get::<_, f64>(6)?,
-                    "net_payer": row.get::<_, f64>(7)?,
-                    "base_cotisable": row.get::<_, f64>(8)?,
-                    "base_imposable": row.get::<_, f64>(9)?,
-                    "irg": row.get::<_, f64>(10)?,
-                    "status": row.get::<_, String>(11)?,
-                    "calculated_at": row.get::<_, String>(12)?,
-                    "nom": row.get::<_, Option<String>>(13)?,
-                    "prenom": row.get::<_, Option<String>>(14)?,
-                    "source": "app",
-                }))
-            })
-            .map_err(|e| e.to_string())?;
-        for row in rows {
-            results.push(row.map_err(|e| e.to_string())?);
-        }
-    }
 
-    // Also include legacy PCPAIE paies with parsed financial totals
-    let mut stmt2 = conn
-        .prepare(r#"SELECT p.id, p.employee_id, p.mois, p.matricule, p.montants, p.sit_fam, p.nbre_enf,
-                    p.nbr_jr_ouv, p.nbr_hr_ouv, p.c_date, p.c_time,
-                    e.nom, e.prenom
-                    FROM paies p
-                    LEFT JOIN employees e ON p.employee_id = e.id
-                    WHERE p.mois != 'TOT-PAIE'
-                    ORDER BY p.mois DESC, e.nom, e.prenom"#)
-        .map_err(|e| e.to_string())?;
-    let rows2 = stmt2
-        .query_map([], |row| {
+        // Legacy PCPAIE paies — filter period in SQL, add LIMIT
+        let (sql2, params2): (&str, Vec<&dyn rusqlite::ToSql>) = if let Some(ref p) = period {
+            (r#"SELECT p.id, p.employee_id, p.mois, p.matricule, p.montants, p.sit_fam, p.nbre_enf,
+                        p.nbr_jr_ouv, p.nbr_hr_ouv, p.c_date, p.c_time,
+                        e.nom, e.prenom
+                        FROM paies p
+                        LEFT JOIN employees e ON p.employee_id = e.id
+                        WHERE p.mois=? AND p.mois != 'TOT-PAIE'
+                        ORDER BY e.nom, e.prenom LIMIT 500"#,
+             vec![p as &dyn rusqlite::ToSql])
+        } else {
+            (r#"SELECT p.id, p.employee_id, p.mois, p.matricule, p.montants, p.sit_fam, p.nbre_enf,
+                        p.nbr_jr_ouv, p.nbr_hr_ouv, p.c_date, p.c_time,
+                        e.nom, e.prenom
+                        FROM paies p
+                        LEFT JOIN employees e ON p.employee_id = e.id
+                        WHERE p.mois != 'TOT-PAIE'
+                        ORDER BY p.mois DESC, e.nom, e.prenom LIMIT 500"#,
+             vec![])
+        };
+        let mut stmt2 = conn.prepare(sql2).map_err(|e| e.to_string())?;
+        let rows2 = stmt2.query_map(params2.as_slice(), |row| {
             let montants: Option<String> = row.get(4)?;
             let (total_brut, net_payer, irg, total_retenues, base_cotisable, base_imposable) =
                 if let Some(ref m) = montants {
@@ -1610,23 +2079,37 @@ fn get_all_salary_history(
                 "prenom": row.get::<_, Option<String>>(12)?,
                 "source": "pcpaie",
             }))
-        })
-        .map_err(|e| e.to_string())?;
-    for row in rows2 {
-        let r = row.map_err(|e| e.to_string())?;
-        if let Some(ref p) = period {
-            if r.get("period").and_then(|v| v.as_str()) == Some(p.as_str()) {
-                results.push(r);
-            }
-        } else {
-            results.push(r);
+        }).map_err(|e| e.to_string())?;
+        for row in rows2 {
+            results.push(row.map_err(|e| e.to_string())?);
         }
-    }
 
-    Ok(results)
+        Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // Get a historical payslip with full rubrique breakdown from PAIES montants
+#[tauri::command]
+fn period_to_paies_patterns(period: &str) -> Vec<String> {
+    // period is YYYY-MM; generate common raw paies.mois patterns
+    let parts: Vec<&str> = period.split('-').collect();
+    if parts.len() != 2 {
+        return vec![period.to_string()];
+    }
+    if let (Ok(y), Ok(m)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+        let mm = format!("{:02}", m);
+        vec![
+            format!("{}-{}", mm, y),
+            format!("{}/{}", mm, y),
+            format!("{}{}", mm, y),
+        ]
+    } else {
+        vec![period.to_string()]
+    }
+}
+
 #[tauri::command]
 fn get_historical_payslip(
     state: State<AppState>,
@@ -1635,17 +2118,36 @@ fn get_historical_payslip(
 ) -> Result<serde_json::Value, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
 
-    let row = conn
-        .query_row(
-            r#"SELECT p.id, p.mois, p.matricule, p.montants, p.sit_fam, p.nbre_enf,
-                      p.nbr_jr_ouv, p.nbr_hr_ouv, p.c_date, p.c_time,
-                      e.nom, e.prenom
-               FROM paies p
-               LEFT JOIN employees e ON p.employee_id = e.id
-               WHERE p.employee_id=? AND p.mois=? AND p.mois != 'TOT-PAIE'
-               LIMIT 1"#,
-            rusqlite::params![employee_id, period],
-            |r| {
+    let patterns = period_to_paies_patterns(&period);
+
+    if patterns.len() < 3 {
+        // Malformed period; return empty payslip
+        return Ok(serde_json::json!({
+            "period": period,
+            "lines": [],
+            "total_brut": 0.0,
+            "net_payer": 0.0,
+            "irg": 0.0,
+            "total_retenues": 0.0,
+            "base_cotisable": 0.0,
+            "base_imposable": 0.0,
+            "source": "pcpaie",
+        }));
+    }
+
+    let sql = format!(
+        r#"SELECT p.id, p.mois, p.matricule, p.montants, p.sit_fam, p.nbre_enf,
+                  p.nbr_jr_ouv, p.nbr_hr_ouv, p.c_date, p.c_time,
+                  e.nom, e.prenom
+           FROM paies p
+           LEFT JOIN employees e ON p.employee_id = e.id
+           WHERE p.employee_id=? AND p.mois GLOB '[0-9][0-9]-[0-9][0-9][0-9][0-9]' AND (p.mois = '{}' OR p.mois = '{}' OR p.mois = '{}')
+           ORDER BY p.mois DESC
+           LIMIT 1"#,
+        patterns[0], patterns[1], patterns[2]
+    );
+
+    let row = conn.query_row(&sql, [employee_id], |r| {
                 let montants: Option<String> = r.get(3)?;
                 let lines: Vec<serde_json::Value> = if let Some(ref m) = montants {
                     let map = parse_montants(m);
@@ -1699,12 +2201,51 @@ fn get_historical_payslip(
     Ok(row)
 }
 
-// Get available periods (from both salary_calculations and paies)
+fn normalize_period(p: &str) -> Option<String> {
+    // Accepts: YYYY-MM, MM-AAAA, MM/AAAA, MMYYYY
+    let p = p.trim();
+    if p.len() < 6 { return None; }
+
+    // MMYYYY (6 digits, all numeric)
+    if p.len() == 6 && p.chars().all(|c| c.is_ascii_digit()) {
+        if let (Ok(m), Ok(y)) = (p[..2].parse::<u32>(), p[2..].parse::<u32>()) {
+            if (1000..=9999).contains(&y) && (1..=12).contains(&m) {
+                return Some(format!("{}-{:02}", y, m));
+            }
+        }
+    }
+
+    // YYYY-MM
+    if p.len() == 7 && p.chars().nth(4) == Some('-') {
+        if let (Ok(y), Ok(m)) = (p[..4].parse::<u32>(), p[5..].parse::<u32>()) {
+            if (1000..=9999).contains(&y) && (1..=12).contains(&m) {
+                return Some(format!("{}-{:02}", y, m));
+            }
+        }
+    }
+
+    // MM-AAAA or MM/AAAA (find separator position)
+    let sep_pos = p.find(&['-', '/'][..]);
+    if let Some(pos) = sep_pos {
+        let (a, b) = p.split_at(pos);
+        let b = &b[1..];
+        if let (Ok(v1), Ok(v2)) = (a.parse::<u32>(), b.parse::<u32>()) {
+            let (y, m) = if v1 > 31 { (v1, v2) } else if v2 > 31 { (v2, v1) } else { return None; };
+            if (1000..=9999).contains(&y) && (1..=12).contains(&m) {
+                return Some(format!("{}-{:02}", y, m));
+            }
+        }
+    }
+
+    None
+}
+
 #[tauri::command]
 fn get_available_periods(state: State<AppState>) -> Result<Vec<String>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut periods = std::collections::BTreeSet::new();
 
+    // From salary_calculations (already YYYY-MM)
     let mut stmt = conn
         .prepare("SELECT DISTINCT period FROM salary_calculations ORDER BY period DESC")
         .map_err(|e| e.to_string())?;
@@ -1713,12 +2254,47 @@ fn get_available_periods(state: State<AppState>) -> Result<Vec<String>, String> 
         if let Ok(p) = r { periods.insert(p); }
     }
 
+    // From paies (MM-AAAA, MM/AAAA etc.)
     let mut stmt2 = conn
-        .prepare("SELECT DISTINCT mois FROM paies ORDER BY mois DESC")
+        .prepare("SELECT DISTINCT mois FROM paies")
         .map_err(|e| e.to_string())?;
     let rows2 = stmt2.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
     for r in rows2 {
+        if let Ok(p) = r {
+            if let Some(norm) = normalize_period(&p) {
+                periods.insert(norm);
+            }
+        }
+    }
+
+    Ok(periods.into_iter().rev().collect())
+}
+
+#[tauri::command]
+fn get_employee_salary_periods(state: State<AppState>, employee_id: i64) -> Result<Vec<String>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut periods = std::collections::BTreeSet::new();
+
+    // From salary_calculations
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT period FROM salary_calculations WHERE employee_id=? ORDER BY period DESC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([employee_id], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    for r in rows {
         if let Ok(p) = r { periods.insert(p); }
+    }
+
+    // From paies
+    let mut stmt2 = conn
+        .prepare("SELECT DISTINCT mois FROM paies WHERE employee_id=?")
+        .map_err(|e| e.to_string())?;
+    let rows2 = stmt2.query_map([employee_id], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    for r in rows2 {
+        if let Ok(p) = r {
+            if let Some(norm) = normalize_period(&p) {
+                periods.insert(norm);
+            }
+        }
     }
 
     Ok(periods.into_iter().rev().collect())
@@ -1865,6 +2441,157 @@ fn calculate_weekday(year: i32, month: i32, day: i32) -> &'static str {
     }
 }
 
+// ===== Field Mappings (PCPAIE data mapping configuration) =====
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FieldMapping {
+    id: i64,
+    logical_name: String,
+    display_label: String,
+    employee_column: String,
+    lookup_table: Option<String>,
+    section: String,
+    sort_order: i64,
+    is_visible: bool,
+}
+
+#[tauri::command]
+fn get_field_mappings(state: State<AppState>) -> Result<Vec<FieldMapping>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, logical_name, display_label, employee_column, lookup_table, section, sort_order, is_visible FROM field_mappings ORDER BY section, sort_order")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| {
+        Ok(FieldMapping {
+            id: row.get(0)?,
+            logical_name: row.get(1)?,
+            display_label: row.get(2)?,
+            employee_column: row.get(3)?,
+            lookup_table: row.get(4)?,
+            section: row.get(5)?,
+            sort_order: row.get(6)?,
+            is_visible: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
+        })
+    }).map_err(|e| e.to_string())?;
+    let mut mappings = Vec::new();
+    for row in rows {
+        mappings.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(mappings)
+}
+
+#[tauri::command]
+fn update_field_mapping(
+    state: State<AppState>,
+    id: i64,
+    display_label: String,
+    employee_column: String,
+    lookup_table: Option<String>,
+    section: String,
+    is_visible: bool,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE field_mappings SET display_label=?, employee_column=?, lookup_table=?, section=?, is_visible=? WHERE id=?",
+        rusqlite::params![display_label, employee_column, lookup_table, section, if is_visible { 1 } else { 0 }, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_available_lookup_tables(state: State<AppState>) -> Result<Vec<String>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT table_name FROM lookup_values ORDER BY table_name")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    let mut tables = Vec::new();
+    for row in rows {
+        tables.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(tables)
+}
+
+#[tauri::command]
+fn get_lookup_table_preview(
+    state: State<AppState>,
+    table_name: String,
+    limit: Option<i64>,
+) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let limit = limit.unwrap_or(50).min(500);
+    let mut stmt = conn
+        .prepare("SELECT code, libelle FROM lookup_values WHERE table_name=? ORDER BY code LIMIT ?")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![table_name, limit], |r| {
+            Ok(serde_json::json!({
+                "code": r.get::<_, String>(0)?,
+                "libelle": r.get::<_, String>(1)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut values = Vec::new();
+    for row in rows {
+        values.push(row.map_err(|e| e.to_string())?);
+    }
+    // Also get total count
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM lookup_values WHERE table_name=?", [&table_name], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "table_name": table_name,
+        "total": total,
+        "values": values,
+    }))
+}
+
+#[tauri::command]
+fn get_all_lookup_tables_preview(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT table_name, code, libelle FROM lookup_values ORDER BY table_name, code")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut by_table: std::collections::BTreeMap<String, Vec<serde_json::Value>> = std::collections::BTreeMap::new();
+    for row in rows {
+        let (table, code, libelle) = row.map_err(|e| e.to_string())?;
+        by_table.entry(table).or_default().push(serde_json::json!({
+            "code": code,
+            "libelle": libelle,
+        }));
+    }
+    let result: serde_json::Map<String, serde_json::Value> = by_table
+        .into_iter()
+        .map(|(table, values)| {
+            (table, serde_json::json!({ "total": values.len(), "values": values }))
+        })
+        .collect();
+    Ok(serde_json::Value::Object(result))
+}
+
+#[tauri::command]
+fn get_available_employee_columns(state: State<AppState>) -> Result<Vec<String>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(employees)")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1)).map_err(|e| e.to_string())?;
+    let mut cols = Vec::new();
+    for row in rows {
+        cols.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(cols)
+}
+
 // ===== Postes (Jobs) =====
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1872,23 +2599,43 @@ struct PosteSummary {
     id: i64,
     name: String,
     description: Option<String>,
+    fnc_code: Option<String>,
+    is_manual: bool,
     employee_count: i64,
+    active_count: i64,
+    avg_seniority_years: f64,
+    total_brut: f64,
+    total_net: f64,
+    avg_brut: f64,
+    last_period: Option<String>,
 }
 
 #[tauri::command]
 fn get_postes(state: State<AppState>) -> Result<Vec<PosteSummary>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare(r#"SELECT p.id, p.name, p.description, COUNT(e.id) as emp_count
-                    FROM postes p LEFT JOIN employees e ON e.poste_id = p.id
-                    GROUP BY p.id ORDER BY p.name"#)
+        .prepare(r#"SELECT p.id, p.name, p.description, p.fnc_code, p.is_manual,
+                    COALESCE(s.employee_count, 0), COALESCE(s.active_count, 0),
+                    COALESCE(s.avg_seniority_years, 0), COALESCE(s.total_brut, 0),
+                    COALESCE(s.total_net, 0), COALESCE(s.avg_brut, 0), s.last_period
+                    FROM postes p
+                    LEFT JOIN poste_stats s ON s.poste_id = p.id
+                    ORDER BY p.name"#)
         .map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], |row| {
         Ok(PosteSummary {
             id: row.get(0)?,
             name: row.get(1)?,
             description: row.get(2)?,
-            employee_count: row.get(3)?,
+            fnc_code: row.get(3)?,
+            is_manual: row.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0,
+            employee_count: row.get(5)?,
+            active_count: row.get(6)?,
+            avg_seniority_years: row.get(7)?,
+            total_brut: row.get(8)?,
+            total_net: row.get(9)?,
+            avg_brut: row.get(10)?,
+            last_period: row.get(11)?,
         })
     }).map_err(|e| e.to_string())?;
     let mut postes = Vec::new();
@@ -1903,21 +2650,25 @@ fn get_poste_detail(state: State<AppState>, poste_id: i64) -> Result<serde_json:
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
 
     let poste: serde_json::Value = conn
-        .query_row("SELECT id, name, description FROM postes WHERE id=?", [poste_id], |r| {
+        .query_row("SELECT id, name, description, fnc_code, is_manual FROM postes WHERE id=?", [poste_id], |r| {
             Ok(serde_json::json!({
                 "id": r.get::<_, i64>(0)?,
                 "name": r.get::<_, String>(1)?,
                 "description": r.get::<_, Option<String>>(2)?,
+                "fnc_code": r.get::<_, Option<String>>(3)?,
+                "is_manual": r.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0,
             }))
         })
         .map_err(|e| e.to_string())?;
 
+    // Rubriques for this poste (régime indemnitaire = gains only), joined with rubriques table
     let mut stmt = conn
         .prepare(r#"SELECT pr.rubrique_code, pr.default_value, pr.is_fixed, pr.sort_order,
-                    r.libelle, r.classe, r.manuelle
+                    r.libelle, r.classe, r.manuelle, r.is_brut
                     FROM poste_rubriques pr
-                    LEFT JOIN rubriques r ON pr.rubrique_code = 'R' || printf('%03d', r.code)
-                    WHERE pr.poste_id=? ORDER BY pr.sort_order"#)
+                    LEFT JOIN rubriques r ON r.code = SUBSTR(pr.rubrique_code, 2)
+                    WHERE pr.poste_id=? AND (r.is_brut IN (1, 6) OR r.is_brut IS NULL)
+                    ORDER BY pr.sort_order"#)
         .map_err(|e| e.to_string())?;
     let rub_rows = stmt.query_map([poste_id], |row| {
         Ok(serde_json::json!({
@@ -1928,6 +2679,10 @@ fn get_poste_detail(state: State<AppState>, poste_id: i64) -> Result<serde_json:
             "libelle": row.get::<_, Option<String>>(4)?,
             "classe": row.get::<_, Option<f64>>(5)?,
             "manuelle": row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
+            "is_brut": row.get::<_, Option<f64>>(7)?,
+            "libelle": row.get::<_, Option<String>>(4)?,
+            "classe": row.get::<_, Option<f64>>(5)?,
+            "manuelle": row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
         }))
     }).map_err(|e| e.to_string())?;
     let mut rubriques = Vec::new();
@@ -1935,9 +2690,10 @@ fn get_poste_detail(state: State<AppState>, poste_id: i64) -> Result<serde_json:
         rubriques.push(row.map_err(|e| e.to_string())?);
     }
 
+    // Employees with pagination
     let mut stmt2 = conn
         .prepare(r#"SELECT e.id, e.matricule, e.nom, e.prenom, e.actif
-                    FROM employees e WHERE e.poste_id=? ORDER BY e.nom, e.prenom"#)
+                    FROM employees e WHERE e.poste_id=? ORDER BY e.nom, e.prenom LIMIT 200"#)
         .map_err(|e| e.to_string())?;
     let emp_rows = stmt2.query_map([poste_id], |row| {
         Ok(serde_json::json!({
@@ -1953,17 +2709,41 @@ fn get_poste_detail(state: State<AppState>, poste_id: i64) -> Result<serde_json:
         employees.push(row.map_err(|e| e.to_string())?);
     }
 
+    // Stats for this poste
+    let stats: serde_json::Value = conn
+        .query_row("SELECT employee_count, active_count, avg_seniority_years, total_brut, total_net, avg_brut, last_period FROM poste_stats WHERE poste_id=?", [poste_id], |r| {
+            Ok(serde_json::json!({
+                "employee_count": r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                "active_count": r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                "avg_seniority_years": r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                "total_brut": r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+                "total_net": r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                "avg_brut": r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                "last_period": r.get::<_, Option<String>>(6)?,
+            }))
+        })
+        .unwrap_or(serde_json::json!({
+            "employee_count": 0,
+            "active_count": 0,
+            "avg_seniority_years": 0.0,
+            "total_brut": 0.0,
+            "total_net": 0.0,
+            "avg_brut": 0.0,
+            "last_period": null,
+        }));
+
     Ok(serde_json::json!({
         "poste": poste,
         "rubriques": rubriques,
         "employees": employees,
+        "stats": stats,
     }))
 }
 
 #[tauri::command]
 fn create_poste(state: State<AppState>, name: String, description: Option<String>) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO postes (name, description) VALUES (?, ?)", rusqlite::params![name, description])
+    conn.execute("INSERT INTO postes (name, description, is_manual) VALUES (?, ?, 1)", rusqlite::params![name, description])
         .map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
 }
@@ -2004,6 +2784,48 @@ fn assign_employee_to_poste(state: State<AppState>, employee_id: i64, poste_id: 
         rusqlite::params![poste_id, employee_id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+fn sync_postes_from_fnc(state: State<AppState>) -> Result<usize, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    crate::import::seed_postes(&conn).map_err(|e| e.to_string())?;
+    crate::import::recompute_all_poste_stats(&conn).map_err(|e| e.to_string())?;
+    Ok(1)
+}
+
+#[tauri::command]
+fn recompute_poste_stats(state: State<AppState>) -> Result<usize, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    crate::import::recompute_all_poste_stats(&conn).map_err(|e| e.to_string())?;
+    Ok(1)
+}
+
+#[tauri::command]
+fn export_database(state: State<AppState>, dest_path: String) -> Result<String, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    // Use SQLite backup API via execute
+    conn.execute(&format!("VACUUM INTO '{}'", dest_path.replace('\'', "''")), [])
+        .map_err(|e| e.to_string())?;
+    Ok(dest_path)
+}
+
+#[tauri::command]
+fn get_database_stats(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let tables = ["employees", "postes", "paies", "rubriques", "lookup_values", "poste_rubriques", "employee_rubriques", "field_mappings"];
+    let mut stats = serde_json::Map::new();
+    for t in &tables {
+        let count: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {}", t), [], |r| r.get(0))
+            .unwrap_or(0);
+        stats.insert(t.to_string(), serde_json::Value::from(count));
+    }
+    // DB file size
+    let db_path = &state.db_path;
+    if let Ok(meta) = std::fs::metadata(db_path) {
+        stats.insert("db_size_bytes".into(), serde_json::Value::from(meta.len() as i64));
+    }
+    Ok(serde_json::Value::Object(stats))
 }
 
 // ===== Employee Salary & Prime Management =====
@@ -2079,6 +2901,85 @@ fn get_employee_current_rubriques(state: State<AppState>, employee_id: i64) -> R
 }
 
 #[tauri::command]
+fn get_employee_salary_history(
+    state: State<AppState>,
+    employee_id: i64,
+    only_real_months: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let only_real = only_real_months.unwrap_or(false);
+
+    // Fetch all paies for the employee (optionally filter real months)
+    let sql = if only_real {
+        "SELECT mois, montants, c_date, date FROM paies WHERE employee_id=? AND mois GLOB '[0-9][0-9]-[0-9][0-9][0-9][0-9]' ORDER BY mois"
+    } else {
+        "SELECT mois, montants, c_date, date FROM paies WHERE employee_id=? ORDER BY mois"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([employee_id], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        ))
+    }).map_err(|e| e.to_string())?;
+
+    let mut periods: Vec<String> = Vec::new();
+    let mut values_by_period: HashMap<String, HashMap<String, f64>> = HashMap::new();
+
+    for row in rows {
+        let (mois, montants, _c_date, _date) = row.map_err(|e| e.to_string())?;
+        periods.push(mois.clone());
+        values_by_period.insert(mois, parse_montants(&montants));
+    }
+
+    // Build rubrique time series
+    let mut all_rubriques: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for map in values_by_period.values() {
+        all_rubriques.extend(map.keys().cloned());
+    }
+
+    // Get libelles
+    let mut rubriques_meta: Vec<serde_json::Value> = Vec::new();
+    for code in &all_rubriques {
+        let numeric: String = code.chars().skip(1).collect();
+        let libelle: Option<String> = conn
+            .query_row("SELECT libelle FROM rubriques WHERE code=?", [&numeric], |r| r.get(0))
+            .ok()
+            .flatten();
+        rubriques_meta.push(serde_json::json!({
+            "code": code,
+            "libelle": libelle,
+        }));
+    }
+
+    // Build series: one array per rubrique with values aligned with periods
+    let mut series: Vec<serde_json::Value> = Vec::new();
+    for code in &all_rubriques {
+        let data: Vec<Option<f64>> = periods.iter().map(|p| values_by_period.get(p).and_then(|m| m.get(code).copied())).collect();
+        let numeric: String = code.chars().skip(1).collect();
+        let libelle: Option<String> = conn
+            .query_row("SELECT libelle FROM rubriques WHERE code=?", [&numeric], |r| r.get(0))
+            .ok()
+            .flatten();
+        series.push(serde_json::json!({
+            "code": code,
+            "libelle": libelle,
+            "data": data,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "employee_id": employee_id,
+        "periods": periods,
+        "rubriques": rubriques_meta,
+        "series": series,
+        "count": periods.len(),
+    }))
+}
+
+#[tauri::command]
 fn update_employee_rubrique(state: State<AppState>, employee_id: i64, rubrique_code: String, new_value: f64, reason: Option<String>) -> Result<(), String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
 
@@ -2135,7 +3036,7 @@ fn get_employee_rubrique_history(state: State<AppState>, employee_id: i64, rubri
 
     if let Some(code) = rubrique_code {
         let mut stmt = conn
-            .prepare("SELECT id, rubrique_code, old_value, new_value, change_date, reason FROM employee_salary_history WHERE employee_id=? AND rubrique_code=? ORDER BY change_date DESC")
+            .prepare("SELECT id, rubrique_code, old_value, new_value, change_date, reason FROM employee_salary_history WHERE employee_id=? AND rubrique_code=? ORDER BY change_date DESC LIMIT 100")
             .map_err(|e| e.to_string())?;
         let rows = stmt.query_map(rusqlite::params![employee_id, code], |row| {
             Ok(serde_json::json!({
@@ -2152,7 +3053,7 @@ fn get_employee_rubrique_history(state: State<AppState>, employee_id: i64, rubri
         }
     } else {
         let mut stmt = conn
-            .prepare("SELECT id, rubrique_code, old_value, new_value, change_date, reason FROM employee_salary_history WHERE employee_id=? ORDER BY change_date DESC")
+            .prepare("SELECT id, rubrique_code, old_value, new_value, change_date, reason FROM employee_salary_history WHERE employee_id=? ORDER BY change_date DESC LIMIT 100")
             .map_err(|e| e.to_string())?;
         let rows = stmt.query_map([employee_id], |row| {
             Ok(serde_json::json!({
@@ -3004,6 +3905,7 @@ pub fn run() {
             auto_match_all,
             bulk_link_users,
             get_employees,
+            get_employee_filter_options,
             get_employee_detail,
             get_employee_children,
             get_employee_leave_history,
@@ -3021,6 +3923,7 @@ pub fn run() {
             get_all_salary_history,
             get_historical_payslip,
             get_available_periods,
+            get_employee_salary_periods,
             get_attendance_calendar,
             get_leaves,
             create_leave,
@@ -3034,7 +3937,17 @@ pub fn run() {
             get_attendance,
             get_rubriques,
             create_rubrique,
+            update_rubrique,
+            delete_rubrique,
+            test_rubrique_formula,
             get_lookup_values,
+            // Field mappings
+            get_field_mappings,
+            update_field_mapping,
+            get_available_lookup_tables,
+            get_lookup_table_preview,
+            get_all_lookup_tables_preview,
+            get_available_employee_columns,
             // Postes
             get_postes,
             get_poste_detail,
@@ -3043,8 +3956,13 @@ pub fn run() {
             delete_poste,
             update_poste_rubrique,
             assign_employee_to_poste,
+            sync_postes_from_fnc,
+            recompute_poste_stats,
+            export_database,
+            get_database_stats,
             // Employee salary & primes
             get_employee_current_rubriques,
+            get_employee_salary_history,
             update_employee_rubrique,
             get_employee_rubrique_history,
             // Overtime

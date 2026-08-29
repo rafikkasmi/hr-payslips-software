@@ -13,13 +13,14 @@ pub struct RubriqueDef {
     pub is_secu_s: bool,
     pub is_total: bool,
     pub is_imp: bool,
-    pub is_impo15: bool,
     pub is_init: bool,
     pub is_regular: bool,
     pub is_locked: bool,
     pub init_val: f64,
     pub ord_clc: f64,
     pub manuelle: bool,
+    pub cd_nb_base: Option<String>,
+    pub cd_taux: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +30,10 @@ pub struct CalcLine {
     pub classe: f64,
     pub amount: f64,
     pub is_input: bool,
+    #[serde(default)]
+    pub base_value: Option<f64>,
+    #[serde(default)]
+    pub taux_value: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +69,8 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
     let mut stmt = conn
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
-               is_total, is_imp, is_impo15, is_init, is_regular, is_locked, init_val, ord_clc, manuelle
+               is_total, is_imp, is_init, is_regular, is_locked, init_val, ord_clc, manuelle,
+               cd_nb_base, cd_taux
                FROM rubriques ORDER BY ord_clc"#,
         )
         .map_err(|e| e.to_string())?;
@@ -81,13 +87,14 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
                 is_secu_s: row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
                 is_total: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
                 is_imp: row.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
-                is_impo15: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
-                is_init: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
-                is_regular: row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
-                is_locked: row.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
-                init_val: row.get::<_, Option<f64>>(13)?.unwrap_or(0.0),
-                ord_clc: row.get::<_, Option<f64>>(14)?.unwrap_or(0.0),
-                manuelle: row.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0,
+                is_init: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
+                is_regular: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+                is_locked: row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
+                init_val: row.get::<_, Option<f64>>(12)?.unwrap_or(0.0),
+                ord_clc: row.get::<_, Option<f64>>(13)?.unwrap_or(0.0),
+                manuelle: row.get::<_, Option<i64>>(14)?.unwrap_or(0) != 0,
+                cd_nb_base: row.get::<_, Option<String>>(15)?,
+                cd_taux: row.get::<_, Option<String>>(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -97,6 +104,26 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
         rubriques.push(row.map_err(|e| e.to_string())?);
     }
     Ok(rubriques)
+}
+
+/// Extract base and taux values for a rubrique from the current R[] values.
+/// Uses cd_nb_base and cd_taux metadata from the rubrique definition.
+fn extract_base_taux(rub: &RubriqueDef, r_values: &HashMap<String, f64>) -> (Option<f64>, Option<f64>) {
+    let base = rub.cd_nb_base.as_ref()
+        .and_then(|code| {
+            let c = code.trim();
+            if c.is_empty() { None } else { r_values.get(c).copied() }
+        });
+    let taux = rub.cd_taux.as_ref()
+        .and_then(|code| {
+            let c = code.trim();
+            if c.is_empty() { None } else { r_values.get(c).copied() }
+        });
+    // Only return if at least one is non-trivial (non-zero or meaningful)
+    if base.is_none() && taux.is_none() {
+        return (None, None);
+    }
+    (base, taux)
 }
 
 /// Check if a period is before September 2023.
@@ -238,6 +265,17 @@ pub fn bareme_irg(base: f64, prorata: f64) -> f64 {
 
 /// Evaluate a PCPAIE formula expression
 /// Supports: R[NNN], T[NN], M, N, IRG(base, prorata), arithmetic + - * / ( )
+pub fn eval_formula_public(
+    formula: &str,
+    r_values: &HashMap<String, f64>,
+    t_values: &HashMap<usize, f64>,
+    m_val: f64,
+    n_val: f64,
+    period: &str,
+) -> Result<f64, String> {
+    eval_formula(formula, r_values, t_values, m_val, n_val, period)
+}
+
 fn eval_formula(
     formula: &str,
     r_values: &HashMap<String, f64>,
@@ -949,6 +987,8 @@ pub fn calculate_salary(
                 classe: 0.0,
                 amount: r050,
                 is_input: false,
+                base_value: Some(n050),
+                taux_value: Some(r010),
             });
             // Add R050 to T[04] (total retenues)
             *t_values.entry(4).or_insert(0.0) += r050;
@@ -978,12 +1018,15 @@ pub fn calculate_salary(
                 *r_values.get(code).unwrap_or(&0.0)
             };
             r_values.insert(code.clone(), amount);
+            let (base_value, taux_value) = extract_base_taux(rub, &r_values);
             lines.push(CalcLine {
                 code: code.clone(),
                 libelle: rub.libelle.clone(),
                 classe: rub.classe,
                 amount,
                 is_input: true,
+                base_value,
+                taux_value,
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             continue;
@@ -992,12 +1035,15 @@ pub fn calculate_salary(
         // Explicit input override (e.g. R532 when R531 parameter is missing)
         if m_val != 0.0 {
             r_values.insert(code.clone(), m_val);
+            let (base_value, taux_value) = extract_base_taux(rub, &r_values);
             lines.push(CalcLine {
                 code: code.clone(),
                 libelle: rub.libelle.clone(),
                 classe: rub.classe,
                 amount: m_val,
                 is_input: true,
+                base_value,
+                taux_value,
             });
             accumulate_t(&mut t_values, rub, m_val, &mut cotisable_gains);
             continue;
@@ -1107,12 +1153,15 @@ pub fn calculate_salary(
             r_values.insert("010".to_string(), r010_save);
             t_values.insert(9, t09_save);
             t_values.insert(78, if t09_save != 0.0 { t10 / t09_save } else { 0.0 });
+            let (base_value, taux_value) = extract_base_taux(rub, &r_values);
             lines.push(CalcLine {
                 code: code.clone(),
                 libelle: rub.libelle.clone(),
                 classe: rub.classe,
                 amount,
                 is_input: false,
+                base_value,
+                taux_value,
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             // After R655: restore R099 and reset T[15]=1.0
@@ -1149,12 +1198,15 @@ pub fn calculate_salary(
         }
 
         r_values.insert(code.clone(), amount);
+        let (base_value, taux_value) = extract_base_taux(rub, &r_values);
         lines.push(CalcLine {
             code: code.clone(),
             libelle: rub.libelle.clone(),
             classe: rub.classe,
             amount,
             is_input: false,
+            base_value,
+            taux_value,
         });
         accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
 
@@ -1269,7 +1321,8 @@ fn accumulate_t(
     }
     // IS_IMPO15: gains taxed at flat 10% (R642 base = T[51] - T[76]*T[53]*R[505]/100)
     // T[51] = sum of is_impo15 gains, T[53] = cotisable portion of those gains
-    if rub.is_impo15 {
+    // Note: is_impo15 column was removed from DB (not in schema). Feature disabled.
+    if false {
         *t_values.entry(51).or_insert(0.0) += amount; // T[51] = 10% tax base
         if rub.is_secu_s {
             *t_values.entry(53).or_insert(0.0) += amount; // T[53] = cotisable for 10%

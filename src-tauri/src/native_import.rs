@@ -325,11 +325,16 @@ pub fn import_native_pcpaie(
     // Re-enable FK enforcement
     app_conn.execute_batch("PRAGMA foreign_keys=ON;").ok();
 
+    // Compute poste stats after import
+    progress("phase5", "stats", 0, 1, "Calcul des statistiques par profil de paie...", 98.0);
+    crate::import::recompute_all_poste_stats(app_conn).unwrap_or_else(|e| { errors.push(format!("Poste stats: {}", e)); });
+    progress("phase5", "stats", 1, 1, "Statistiques calculées", 99.0);
+
     // Auto-cleanup: checkpoint WAL + vacuum to compact the database
-    progress("phase5", "cleanup", 0, 1, "Nettoyage DB (VACUUM + WAL checkpoint)...", 98.0);
+    progress("phase5", "cleanup", 0, 1, "Nettoyage DB (VACUUM + WAL checkpoint)...", 99.0);
     app_conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").ok();
     app_conn.execute_batch("VACUUM;").ok();
-    progress("phase5", "cleanup", 1, 1, "DB nettoyée", 99.0);
+    progress("phase5", "cleanup", 1, 1, "DB nettoyée", 99.5);
 
     progress("phase5", "done", 1, 1, "Import terminé", 100.0);
 
@@ -367,8 +372,8 @@ fn import_employees(app: &Connection, path: &str, progress: impl Fn(usize, usize
                 motif_sort, dte_cont_d, dte_cont_f, dte_repris, nbr_enfp10, nbr_enfm10,
                 no_mutuel, mutu_dted, mutu_dtef, conj_trav, ok_intemp, ok_nat_etr,
                 attrib1, attrib2, attrib3, categ_sp, diplome, code_grill, gestion, lock_val, conge, sorti,
-                nbr_enf_af, nbr_prs_ch, no_profil)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#,
+                nbr_enf_af, nbr_prs_ch, no_profil, site_code, scolarite_code)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#,
             rusqlite::params![
                 matricule,
                 get_str(&record, "NOM"), get_str(&record, "PRENOM"),
@@ -395,6 +400,7 @@ fn import_employees(app: &Connection, path: &str, progress: impl Fn(usize, usize
                 if get_bool(&record, "CONGE") { 1 } else { 0 },
                 if get_bool(&record, "SORTI") { 1 } else { 0 },
                 get_num(&record, "NBR_ENF_AF"), get_num(&record, "NBR_PRS_CH"), get_num(&record, "NO_PROFIL"),
+                get_str(&record, "DAS"), get_str(&record, "EMPLOI"),
             ],
         ).map_err(|e| e.to_string())?;
         inserted += 1;

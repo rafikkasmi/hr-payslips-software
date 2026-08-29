@@ -1,7 +1,7 @@
-import { LayoutDashboard, Users, Clock, Fingerprint, CalendarOff, Gift, Calculator, Settings, Briefcase } from "lucide-react";
+import { LayoutDashboard, Users, Clock, Fingerprint, CalendarOff, Gift, Calculator, Settings, Briefcase, ListChecks } from "lucide-react";
 import { cn } from "../lib/utils";
 
-export type Page = "dashboard" | "employees" | "postes" | "shifts" | "pointeuse" | "attendance" | "leaves" | "bonuses" | "salary";
+export type Page = "dashboard" | "employees" | "postes" | "rubriques" | "shifts" | "pointeuse" | "attendance" | "leaves" | "bonuses" | "salary" | "settings";
 
 interface SidebarProps {
   currentPage: Page;
@@ -10,14 +10,15 @@ interface SidebarProps {
 
 const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { page: "employees", label: "Employees", icon: Users },
-  { page: "postes", label: "Postes", icon: Briefcase },
+  { page: "employees", label: "Employés", icon: Users },
+  { page: "postes", label: "Profils de paie", icon: Briefcase },
+  { page: "rubriques", label: "Rubriques", icon: ListChecks },
   { page: "shifts", label: "Shifts", icon: Clock },
   { page: "pointeuse", label: "Pointeuse", icon: Fingerprint },
-  { page: "attendance", label: "Attendance", icon: CalendarOff },
-  { page: "leaves", label: "Leaves", icon: CalendarOff },
-  { page: "bonuses", label: "Bonuses", icon: Gift },
-  { page: "salary", label: "Salary", icon: Calculator },
+  { page: "attendance", label: "Présence", icon: CalendarOff },
+  { page: "leaves", label: "Congés", icon: CalendarOff },
+  { page: "bonuses", label: "Primes", icon: Gift },
+  { page: "salary", label: "Paie", icon: Calculator },
 ];
 
 export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
@@ -50,9 +51,17 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         })}
       </nav>
       <div className="border-t border-gray-200 p-3">
-        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100">
+        <button
+          onClick={() => onNavigate("settings")}
+          className={cn(
+            "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+            currentPage === "settings"
+              ? "bg-blue-50 text-blue-700"
+              : "text-gray-700 hover:bg-gray-100"
+          )}
+        >
           <Settings className="h-5 w-5" />
-          Settings
+          Paramètres
         </button>
       </div>
     </aside>

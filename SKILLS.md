@@ -544,4 +544,271 @@ python audit_pcpaie.py    # Audit complet de tous les .DTA
 
 ---
 
+## 13. Sélecteur de Période & Historique de Salaire
+
+### PeriodSelector (composant React)
+
+Composant compact de sélection année/mois avec indicateurs visuels pour les mois ayant un historique de salaire.
+
+- **Props**: `year`, `month`, `onChange(year, month)`, `availablePeriods: string[]` (format `YYYY-MM`)
+- **Affichage**: sélecteur d'année (spinner) + grille de 12 mois (boutons cliquables)
+- **Indicateurs**: les mois avec historique ont un point bleu sous le label
+- **Compact**: hauteur réduite, mois en 3 colonnes × 4 lignes
+
+### Backend — Périodes
+
+- `get_available_periods()` — Toutes les périodes disponibles (globales, depuis `paies` + `salary_calculations`)
+- `get_employee_salary_periods(employee_id)` — Périodes spécifiques à un employé
+- `normalize_period(period)` — Convertit divers formats (`MM-AAAA`, `MM/AAAA`, `YYYY-MM`, `MMYYYY`) vers `YYYY-MM`
+
+### Backend — Historique
+
+- `get_salary_history(employee_id)` — Historique des salaires (fallback sur `paies` importé si pas de calculs)
+- `get_historical_payslip(employee_id, period)` — Bulletin de paie historique
+  - Convertit `YYYY-MM` vers les formats bruts de `paies.mois` (ex: `01/2023`, `1/2023`, `012023`, etc.)
+  - Retourne les montants désérialisés + totaux + table des rubriques
+
+### Filtre par période dans le détail employé
+
+L'onglet **Salary** de `EmployeesPage` affiche:
+1. Le `PeriodSelector` en haut
+2. Un bulletin de paie détaillé pour la période sélectionnée (rubriques, totaux)
+
+---
+
+## 14. Filtres Employés Avancés
+
+### Vue d'ensemble
+
+La page Employés dispose d'un panneau de filtres avancés avec:
+- Recherche textuelle (nom, prénom, matricule) — `useDeferredValue` pour debounce
+- Filtres serveur (SQL) avec pagination
+- Indicateur bleu montrant le nombre d'employés trouvés + filtres actifs
+- Bouton "Effacer les filtres"
+- Badge sur le bouton "Filtres" indiquant le nombre de filtres actifs
+
+### Filtres disponibles
+
+| Filtre              | Type          | Champ DB         | Masqué si vide ? |
+|---------------------|---------------|------------------|------------------|
+| Recherche           | Texte         | nom/prenom/matricule | Non           |
+| Actifs seulement    | Checkbox      | `actif = 1`      | Non              |
+| Fonction / Poste    | Select (id)   | `poste_id`       | Non              |
+| Section             | Select        | `section`        | Oui              |
+| Structure           | Select        | `structure`      | Oui              |
+| Unité               | Select        | `unite`          | Oui              |
+| Catégorie           | Select        | `categorie`      | Oui              |
+| Sexe                | Select (M/F)  | `sexe`           | Non              |
+| Contrat             | Select        | `contrat`        | Oui              |
+| Échelon             | Select        | `echelon`        | Oui              |
+| Classe              | Select        | `classe`         | Oui              |
+| Date d'embauche     | Date range    | `dte_entree`     | Non              |
+| Date de sortie      | Date range    | `dte_sortie`     | Non              |
+
+### Architecture du filtrage
+
+**Frontend (`EmployeesPage.tsx`)**:
+- États: `fPoste`, `fSection`, `fStructure`, `fUnite`, `fCategorie`, `fSexe`, `fContrat`, `fEchelon`, `fClasse`, `fActifOnly`, `fHireFrom`, `fHireTo`, `fExitFrom`, `fExitTo`
+- `useEffect` avec dépendances sur tous les filtres → recharge automatique
+- `useEffect` séparé pour reset `currentPage` quand les filtres changent
+- `clearFilters()` réinitialise tous les filtres
+
+**Frontend (`api.ts`)**:
+- `EmployeeFilters` — interface avec tous les champs (optionnels)
+- `EmployeeFilterOptions` — options disponibles (listes distinctes depuis la DB)
+- `getEmployees(filters)` — invoke avec clés **camelCase**
+
+**Backend Rust (`lib.rs`)**:
+- `get_employees(...)` — 18 paramètres `Option<T>` pour tous les filtres
+- Construction dynamique des clauses WHERE + params SQL
+- `COUNT(*) OVER ()` pour le `total_count` dans chaque row (pagination)
+- `get_employee_filter_options()` — retourne les valeurs distinctes pour les selects
+
+### ⚠️ Convention de nommage Tauri 2.x (PIÈGE CRITIQUE)
+
+**Tauri 2.x convertit automatiquement `camelCase` (JS) → `snake_case` (Rust).**
+
+| Côté JS (api.ts)  | Côté Rust (lib.rs) | Conversion Tauri |
+|--------------------|--------------------|------------------|
+| `actifOnly`        | `actif_only`       | ✅ Correct        |
+| `posteId`          | `poste_id`         | ✅ Correct        |
+| `postId`           | `post_id`          | ❌ Ne match PAS `poste_id` |
+| `pageSize`         | `page_size`        | ✅ Correct        |
+| `hireDateFrom`     | `hire_date_from`   | ✅ Correct        |
+| `exitDateTo`       | `exit_date_to`     | ✅ Correct        |
+
+**Règle**: Si le paramètre Rust contient un mot avec une orthographe spécifique (ex: `poste` avec un 'e'), le JS doit utiliser exactement `posteId` (pas `postId`).
+
+**Bug historique résolu**: Les filtres `actif_only` et `poste_id` ne fonctionnaient pas car le JS envoyait `snake_case` (`actif_only`, `poste_id`) au lieu de `camelCase` (`actifOnly`, `posteId`). Tauri ne faisait pas la conversion inverse (`snake_case` → `snake_case`), donc les paramètres arrivaient à `None` côté Rust.
+
+### Pagination
+
+- `page` (1-based) + `page_size` (défaut 50, max 500)
+- `LIMIT ? OFFSET ?` en SQL
+- `total_count` via `COUNT(*) OVER ()` (window function) — présent dans chaque row
+- Frontend: `currentPage` (0-based) → `page: currentPage + 1`
+- Reset de `currentPage` à 0 quand les filtres changent
+
+### Données réelles du dataset PCPAIE (audit)
+
+| Champ       | Valeurs distinctes | Employés concernés |
+|-------------|-------------------|-------------------|
+| `actif`     | 0 (297), 1 (48)   | 345 total         |
+| `poste_id`  | ~78 postes        | Tous assignés     |
+| `section`   | Vide              | 0                 |
+| `structure` | Vide              | 0                 |
+| `unite`     | Vide              | 0                 |
+| `categorie` | Vide              | 0                 |
+| `contrat`   | '001'             | 3                 |
+| `echelon`   | Vide              | 0                 |
+| `classe`    | Vide              | 0                 |
+| `dte_entree`| Format YYYY-MM-DD | 344               |
+| `dte_sortie`| Format YYYY-MM-DD | 292               |
+
+**Note**: Section, Structure, Unité, Catégorie, Échelon et Classe sont vides dans ce dataset. Les filtres correspondants sont automatiquement masqués dans l'UI (condition `filterOptions?.xxx.length > 0`).
+
+### Labels des filtres
+
+| Label UI           | Valeur DB     |
+|--------------------|---------------|
+| Homme              | `M`           |
+| Femme              | `F`           |
+| Fonction / Poste   | `poste_id` (FK vers `postes`) |
+
+### Colonne "Poste/Fonction" dans la table
+
+La table des employés affiche la colonne **Poste/Fonction** (au lieu de "Section" qui est vide).
+- Affiche `postes.name` (libellé du poste)
+- Si pas de poste assigné: affiche le code FNC (`fnc_code`)
+
+---
+
+## 14bis. Rubriques Modernes (2025) — Paramétrage Algérien
+
+### Contexte réglementaire 2025
+
+| Élément | Valeur 2025 | Source |
+|---------|-------------|--------|
+| SNMG | 24 000 DA brut/mois | Décret présidentiel |
+| CNAS salarié | 9% (1.5% maladie + 6.75% retraite + 0.5% chômage + 0.25% retraite anticipée) | Décret 15-236 |
+| CNAS employeur | 26% (12.5% maladie + 1.25% AT + 11% retraite + 1% chômage + 0.25% retraite anticipée) | Décret 15-236 |
+| Barème IRG | 0% (0-20K), 23% (20-40K), 27% (40-80K), 30% (80-160K), 33% (160-320K), 35% (>320K) | Loi de Finances 2022+ |
+| Réduction famille | 1 500 DA/mois par personne à charge (conjoint + 5 enfants max) | CIDTA |
+| HS jour ouvrable | +50% | Loi 90-11 art. 32 |
+| HS nuit (21h-5h) | +75% | Décret 97-473 |
+| HS jour repos/férié | +100% | Loi 90-11 art. 44 |
+
+### Nouvelles rubriques (R960-R984)
+
+Créées sans modifier les rubriques PCPAIE existantes. Codes 960-984.
+
+#### CNAS 2025 — Cotisations salariales détaillées (classe 2 = Retenues)
+
+| Code | Libellé | Formule | Flags |
+|------|---------|---------|-------|
+| R960 | CNAS Maladie Salarié 1.5% | `R[500]*1.5/100` | IMPOS, TOTAL |
+| R961 | CNAS Retraite Salarié 6.75% | `R[500]*6.75/100` | IMPOS, TOTAL |
+| R962 | CNAC Chômage Salarié 0.5% | `R[500]*0.5/100` | IMPOS, TOTAL |
+| R963 | CNAS Retr. Antic. Salarié 0.25% | `R[500]*0.25/100` | IMPOS, TOTAL |
+| R964 | **Total CNAS Salarié 9%** | `R[960]+R[961]+R[962]+R[963]` | IMPOS, TOTAL |
+
+#### CNAS 2025 — Cotisations patronales détaillées (classe 0 = Info)
+
+| Code | Libellé | Formule | Flags |
+|------|---------|---------|-------|
+| R965 | CNAS Maladie Employeur 12.5% | `R[500]*12.5/100` | SECU, TOTAL |
+| R966 | CNAS AT/Maladie Pro Employeur 1.25% | `R[500]*1.25/100` | SECU, TOTAL |
+| R967 | CNAS Retraite Employeur 11% | `R[500]*11/100` | SECU, TOTAL |
+| R968 | CNAC Chômage Employeur 1% | `R[500]*1/100` | SECU, TOTAL |
+| R969 | CNAS Retr. Antic. Employeur 0.25% | `R[500]*0.25/100` | SECU, TOTAL |
+| R970 | **Total CNAS Employeur 26%** | `R[965]+R[966]+R[967]+R[968]+R[969]` | SECU, TOTAL |
+
+#### IRG 2025 — Calcul modernisé (classe 2 = Retenues)
+
+| Code | Libellé | Formule | Flags |
+|------|---------|---------|-------|
+| R971 | Base imposable IRG 2025 | `R[763]-R[964]` (Brut - CNAS salarié) | TOTAL |
+| R972 | Réduction charges famille 2025 | *(manuel: (1 + nb_enf) × 1500)* | TOTAL |
+| R973 | IRG 2025 (barème) | `IRG(R[971],R[655])` | IMPOS, TOTAL |
+| R974 | **IRG 2025 Net (après réduction)** | `R[973]-R[972]` | IMPOS, TOTAL |
+
+#### Prime d'ancienneté (classe 1 = Gain)
+
+| Code | Libellé | Formule | Flags |
+|------|---------|---------|-------|
+| R975 | Années d'ancienneté | *(manuel ou calculé depuis dte_entree)* | — |
+| R976 | Taux ancienneté % | *(manuel: 0.5% par an, max 25%)* | — |
+| R977 | **Prime d'ancienneté** | `R[975]*R[976]*R[250]/100` | BRUT, IMPOS, SECU, TOTAL |
+
+#### Transport + Panier modernisés (classe 1 = Gain)
+
+| Code | Libellé | Formule | Flags |
+|------|---------|---------|-------|
+| R978 | Indemnité transport forfait 2025 | *(manuel, non cotisable)* | IMPOS, TOTAL, MANUELLE |
+| R979 | Panier jours 2025 | *(manuel: nombre de jours)* | — |
+| R980 | Panier taux 2025 | `120` (was 50 DA) | — |
+| R981 | **Indemnité panier 2025** | `R[979]*R[980]` | BRUT, IMPOS, TOTAL, MANUELLE |
+
+#### 13ème mois + Prime de bilan (classe 1 = Gain)
+
+| Code | Libellé | Formule | Flags |
+|------|---------|---------|-------|
+| R982 | **Gratification 13ème mois** | `R[030]/12` (1/12 du salaire de base) | BRUT, IMPOS, SECU, TOTAL, MANUELLE |
+| R983 | Prime de bilan / fin d'année | *(manuel)* | BRUT, IMPOS, SECU, TOTAL, MANUELLE |
+
+#### Indemnité de licenciement (classe 1 = Gain)
+
+| Code | Libellé | Formule | Flags |
+|------|---------|---------|-------|
+| R984 | Indemnité licenciement (1/2 mois/an) | *(calcul séparé: ½ mois × années d'ancienneté)* | TOTAL, MANUELLE |
+
+### Correspondance PCPAIE → Moderne
+
+| Fonction | PCPAIE (ancien) | Moderne (2025) | Différence |
+|----------|-----------------|----------------|------------|
+| CNAS salarié | R510 (9% global) | R960-R964 (détaillé) | Décomposition par branche |
+| CNAS employeur | R816 (16%) + R817 (26%) | R965-R970 (détaillé 26%) | Taux actualisé |
+| IRG | R660 | R973-R974 | Avec réduction famille explicite |
+| Panier | R522 (taux=50) | R981 (taux=120) | Taux doublé |
+| Ancienneté | R261 (IEP) | R977 | Formule basée sur R[250] |
+| 13ème mois | — | R982 | Nouveau |
+
+### Script d'insertion
+
+```bash
+python insert_modern_rubriques.py  # Insère/met à jour R960-R984
+```
+
+---
+
+## 15. Dépannage — Filtres Employés
+
+### Les filtres ne s'appliquent pas
+
+1. **Vérifier les logs Rust** — `eprintln!("get_employees filters: ...")` dans `lib.rs` affiche les valeurs reçues
+2. **Si tout est `None`** — Problème de nommage Tauri:
+   - Vérifier que `api.ts` utilise `camelCase` (`actifOnly`, `posteId`, `pageSize`)
+   - Vérifier que `lib.rs` utilise `snake_case` (`actif_only`, `poste_id`, `page_size`)
+3. **Si les valeurs passent mais pas de résultat** — Vérifier les données:
+   ```python
+   python audit_filter.py  # Test les filtres SQL directement
+   ```
+4. **HMR ne recharge pas** — Fermer et relancer `npx tauri dev`
+
+### Le total_count ne correspond pas
+
+- Utiliser `COUNT(*) OVER () as total_count` dans le SELECT (window function)
+- Le `total_count` est présent dans chaque row retournée
+- Frontend: `if (emps.length > 0) setTotalCount(emps[0].total_count); else setTotalCount(0);`
+
+### Scripts de diagnostic
+
+```bash
+python audit_filter.py        # Test les filtres SQL (actif, poste, combiné)
+python audit_new_filters.py   # Audit des nouveaux filtres (contrat, echelon, classe, dates)
+python test_poste_options.py  # Vérifie les postes et leurs counts
+```
+
+---
+
 *Document généré le 2026-08-28, mis à jour le 2026-08-28 — HAMTECH Paie v0.1.0*

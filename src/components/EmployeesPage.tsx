@@ -1,9 +1,11 @@
-import { useState, useEffect } from "react";
-import { api, type EmployeeSummary, type Shift, type AttendanceDay, type CalcResult, type EmployeeRubrique, type RubriqueHistoryEntry } from "../lib/api";
+import { useState, useEffect, useMemo, useDeferredValue, useCallback } from "react";
+import { api, type EmployeeSummary, type Shift, type AttendanceDay, type CalcResult, type EmployeeRubrique, type RubriqueHistoryEntry, type EmployeeFilterOptions, type HistoricalPayslip } from "../lib/api";
+import { SalaryHistoryPanel } from "./SalaryHistoryPanel";
+import { PeriodSelector } from "./PeriodSelector";
 import { formatCurrency } from "../lib/utils";
 import {
   Search, X, Clock, Calculator, History, ChevronLeft, ChevronRight,
-  Loader2, DollarSign, Edit2, Save,
+  Loader2, DollarSign, Edit2, Save, Filter, ChevronDown, Calendar,
 } from "lucide-react";
 
 const statusColors: Record<string, string> = {
@@ -29,11 +31,14 @@ export function EmployeesPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedEmp, setSelectedEmp] = useState<EmployeeSummary | null>(null);
-  const [detailTab, setDetailTab] = useState<"info" | "attendance" | "salary" | "primes" | "family" | "leave" | "loans" | "events">("info");
+  const [detailTab, setDetailTab] = useState<"info" | "attendance" | "salary" | "salary_history" | "primes" | "family" | "leave" | "loans" | "events">("info");
   const [calendar, setCalendar] = useState<AttendanceDay[]>([]);
   const [calYear, setCalYear] = useState(new Date().getFullYear());
   const [calMonth, setCalMonth] = useState(new Date().getMonth() + 1);
   const [salaryHistory, setSalaryHistory] = useState<Record<string, unknown>[]>([]);
+  const [salaryPeriods, setSalaryPeriods] = useState<string[]>([]);
+  const [selectedPayslip, setSelectedPayslip] = useState<HistoricalPayslip | null>(null);
+  const [loadingPayslip, setLoadingPayslip] = useState(false);
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null);
   const [calcPeriod, setCalcPeriod] = useState(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`);
   const [calculating, setCalculating] = useState(false);
@@ -48,12 +53,35 @@ export function EmployeesPage() {
   const [loadingPreCalc, setLoadingPreCalc] = useState(false);
   const [rubInputs, setRubInputs] = useState<Record<string, number>>({});
 
+  // Server-side filters
+  const [filterOptions, setFilterOptions] = useState<EmployeeFilterOptions | null>(null);
+  const [fPoste, setFPoste] = useState<number | null>(null);
+  const [fSection, setFSection] = useState<string | null>(null);
+  const [fStructure, setFStructure] = useState<string | null>(null);
+  const [fUnite, setFUnite] = useState<string | null>(null);
+  const [fCategorie, setFCategorie] = useState<string | null>(null);
+  const [fSexe, setFSexe] = useState<string | null>(null);
+  const [fContrat, setFContrat] = useState<string | null>(null);
+  const [fEchelon, setFEchelon] = useState<string | null>(null);
+  const [fClasse, setFClasse] = useState<string | null>(null);
+  const [fHireFrom, setFHireFrom] = useState<string>("");
+  const [fHireTo, setFHireTo] = useState<string>("");
+  const [fExitFrom, setFExitFrom] = useState<string>("");
+  const [fExitTo, setFExitTo] = useState<string>("");
+  const [fActifOnly, setFActifOnly] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const pageSize = 50;
+
+  const deferredSearch = useDeferredValue(search);
+
   const loadData = async () => {
     setLoading(true);
     try {
-      const [emps, shfts] = await Promise.all([api.getEmployees(), api.getShifts()]);
-      setEmployees(emps);
+      const [shfts, opts] = await Promise.all([api.getShifts(), api.getEmployeeFilterOptions()]);
       setShifts(shfts);
+      setFilterOptions(opts);
     } catch (e) {
       console.error(e);
     } finally {
@@ -63,17 +91,70 @@ export function EmployeesPage() {
 
   useEffect(() => { loadData(); }, []);
 
+  // Load employees whenever filters or page change
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const payload = {
+      search: deferredSearch || null,
+      actif_only: fActifOnly || null,
+      poste_id: fPoste,
+      section: fSection,
+      structure: fStructure,
+      unite: fUnite,
+      categorie: fCategorie,
+      sexe: fSexe,
+      contrat: fContrat,
+      echelon: fEchelon,
+      classe: fClasse,
+      hire_date_from: fHireFrom || null,
+      hire_date_to: fHireTo || null,
+      exit_date_from: fExitFrom || null,
+      exit_date_to: fExitTo || null,
+      page: currentPage + 1,
+      page_size: pageSize,
+    };
+    console.log("getEmployees payload:", payload);
+    api.getEmployees(payload)
+      .then((emps) => {
+        if (cancelled) return;
+        setEmployees(emps);
+        if (emps.length > 0) setTotalCount(emps[0].total_count);
+        else setTotalCount(0);
+      })
+      .catch((e) => console.error(e))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [deferredSearch, fActifOnly, fPoste, fSection, fStructure, fUnite, fCategorie, fSexe, fContrat, fEchelon, fClasse, fHireFrom, fHireTo, fExitFrom, fExitTo, currentPage]);
+
+  // Reset page when filters change
+  useEffect(() => { setCurrentPage(0); }, [deferredSearch, fActifOnly, fPoste, fSection, fStructure, fUnite, fCategorie, fSexe, fContrat, fEchelon, fClasse, fHireFrom, fHireTo, fExitFrom, fExitTo]);
+
+  const clearFilters = () => {
+    setFPoste(null); setFSection(null); setFStructure(null);
+    setFUnite(null); setFCategorie(null); setFSexe(null); setFActifOnly(false);
+    setFContrat(null); setFEchelon(null); setFClasse(null);
+    setFHireFrom(""); setFHireTo(""); setFExitFrom(""); setFExitTo("");
+  };
+  const activeFilterCount = [fPoste, fSection, fStructure, fUnite, fCategorie, fSexe, fContrat, fEchelon, fClasse].filter(v => v != null && v !== "").length
+    + (fActifOnly ? 1 : 0)
+    + (fHireFrom ? 1 : 0) + (fHireTo ? 1 : 0) + (fExitFrom ? 1 : 0) + (fExitTo ? 1 : 0);
+
   useEffect(() => {
     if (selectedEmp && detailTab === "attendance") {
       loadCalendar();
     }
     if (selectedEmp && detailTab === "salary") {
       loadSalaryHistory();
+      loadPayslip();
+    }
+    if (selectedEmp && detailTab === "salary_history") {
+      // SalaryHistoryPanel loads its own data
     }
     if (selectedEmp && detailTab === "primes") {
       loadEmpRubriques();
     }
-  }, [selectedEmp, detailTab, calYear, calMonth]);
+  }, [selectedEmp, detailTab, calYear, calMonth, calcPeriod]);
 
   const loadCalendar = async () => {
     if (!selectedEmp) return;
@@ -88,9 +169,27 @@ export function EmployeesPage() {
   const loadSalaryHistory = async () => {
     if (!selectedEmp) return;
     try {
-      const h = await api.getSalaryHistory(selectedEmp.id);
+      const [h, periods] = await Promise.all([
+        api.getSalaryHistory(selectedEmp.id),
+        api.getEmployeeSalaryPeriods(selectedEmp.id),
+      ]);
       setSalaryHistory(h);
+      setSalaryPeriods(periods);
     } catch (e) { console.error(e); }
+  };
+
+  const loadPayslip = async () => {
+    if (!selectedEmp || !calcPeriod) return;
+    setLoadingPayslip(true);
+    try {
+      const payslip = await api.getHistoricalPayslip(selectedEmp.id, calcPeriod);
+      setSelectedPayslip(payslip);
+    } catch (e) {
+      console.error(e);
+      setSelectedPayslip(null);
+    } finally {
+      setLoadingPayslip(false);
+    }
   };
 
   const handleCalculate = async () => {
@@ -167,23 +266,22 @@ export function EmployeesPage() {
   const handleAssignShift = async (empId: number, shiftId: number) => {
     try {
       await api.assignShift(empId, shiftId);
-      loadData();
+      // Optimistic update: update local state instead of full reload
+      setEmployees(prev => prev.map(e =>
+        e.id === empId ? { ...e, shift_name: shifts.find(s => s.id === shiftId)?.name ?? null } : e
+      ));
     } catch (e) { console.error(e); }
   };
 
-  const filtered = employees.filter((e) => {
-    const q = search.toLowerCase();
-    return e.nom.toLowerCase().includes(q) ||
-      e.prenom.toLowerCase().includes(q) ||
-      e.matricule.toLowerCase().includes(q);
-  });
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const paged = employees;
 
   const monthName = new Date(calYear, calMonth - 1, 1).toLocaleDateString("en", { month: "long", year: "numeric" });
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-900">Employees</h1>
-      <p className="mt-1 text-sm text-gray-500">{employees.length} employees imported from PCPAIE</p>
+      <h1 className="text-2xl font-bold text-gray-900">Employés</h1>
+      <p className="mt-1 text-sm text-gray-500">{totalCount} employés au total · page {currentPage + 1}/{totalPages || 1}</p>
 
       <div className="mt-4 flex items-center gap-3">
         <div className="relative flex-1">
@@ -192,22 +290,157 @@ export function EmployeesPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name or matricule..."
+            placeholder="Rechercher par nom, prénom ou matricule..."
             className="w-full rounded-lg border border-gray-300 py-2 pl-10 pr-4 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
         </div>
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium ${activeFilterCount > 0 ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"}`}
+        >
+          <Filter className="h-4 w-4" />
+          Filtres
+          {activeFilterCount > 0 && <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
+        </button>
       </div>
+
+      {showFilters && (
+        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700">Filtres avancés</h3>
+            {activeFilterCount > 0 && (
+              <button onClick={clearFilters} className="text-xs text-red-600 hover:text-red-800">Effacer les filtres</button>
+            )}
+          </div>
+          <div className="grid grid-cols-4 gap-3">
+            <div className="col-span-4 text-xs text-blue-600 bg-blue-50 rounded px-2 py-1">
+              Filtre actif: {totalCount} employé(s) trouvé(s)
+              {fActifOnly && " | Actifs seulement"}
+              {fPoste != null && ` | Poste #${fPoste}`}
+              {fSexe && ` | Sexe: ${fSexe}`}
+              {fContrat && ` | Contrat: ${fContrat}`}
+              {fEchelon && ` | Échelon: ${fEchelon}`}
+              {fClasse && ` | Classe: ${fClasse}`}
+              {fHireFrom && ` | Embauche dès: ${fHireFrom}`}
+              {fHireTo && ` | Embauche jusqu'au: ${fHireTo}`}
+              {fExitFrom && ` | Sortie dès: ${fExitFrom}`}
+              {fExitTo && ` | Sortie jusqu'au: ${fExitTo}`}
+            </div>
+            <div>
+              <label className="text-xs text-gray-500">Fonction / Poste</label>
+              <select value={fPoste != null ? String(fPoste) : ""} onChange={(e) => setFPoste(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                <option value="">Tous</option>
+                {filterOptions?.postes.map((p) => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+              </select>
+            </div>
+            {filterOptions?.sections && filterOptions.sections.length > 0 && (
+              <div>
+                <label className="text-xs text-gray-500">Section</label>
+                <select value={fSection ?? ""} onChange={(e) => setFSection(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                  <option value="">Toutes</option>
+                  {filterOptions.sections.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {filterOptions?.structures && filterOptions.structures.length > 0 && (
+              <div>
+                <label className="text-xs text-gray-500">Structure</label>
+                <select value={fStructure ?? ""} onChange={(e) => setFStructure(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                  <option value="">Toutes</option>
+                  {filterOptions.structures.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {filterOptions?.unites && filterOptions.unites.length > 0 && (
+              <div>
+                <label className="text-xs text-gray-500">Unité</label>
+                <select value={fUnite ?? ""} onChange={(e) => setFUnite(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                  <option value="">Toutes</option>
+                  {filterOptions.unites.map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+            )}
+            {filterOptions?.categories && filterOptions.categories.length > 0 && (
+              <div>
+                <label className="text-xs text-gray-500">Catégorie</label>
+                <select value={fCategorie ?? ""} onChange={(e) => setFCategorie(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                  <option value="">Toutes</option>
+                  {filterOptions.categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="text-xs text-gray-500">Sexe</label>
+              <select value={fSexe ?? ""} onChange={(e) => setFSexe(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                <option value="">Tous</option>
+                <option value="M">Homme</option>
+                <option value="F">Femme</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" checked={fActifOnly} onChange={(e) => setFActifOnly(e.target.checked)} className="rounded border-gray-300" />
+                Actifs seulement
+              </label>
+            </div>
+            {filterOptions?.contrats && filterOptions.contrats.length > 0 && (
+              <div>
+                <label className="text-xs text-gray-500">Contrat</label>
+                <select value={fContrat ?? ""} onChange={(e) => setFContrat(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                  <option value="">Tous</option>
+                  {filterOptions.contrats.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            {filterOptions?.echelons && filterOptions.echelons.length > 0 && (
+              <div>
+                <label className="text-xs text-gray-500">Échelon</label>
+                <select value={fEchelon ?? ""} onChange={(e) => setFEchelon(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                  <option value="">Tous</option>
+                  {filterOptions.echelons.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            {filterOptions?.classes && filterOptions.classes.length > 0 && (
+              <div>
+                <label className="text-xs text-gray-500">Classe</label>
+                <select value={fClasse ?? ""} onChange={(e) => setFClasse(e.target.value || null)} className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                  <option value="">Toutes</option>
+                  {filterOptions.classes.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="col-span-2">
+              <label className="text-xs text-gray-500">Date d'embauche (du → au)</label>
+              <div className="mt-1 flex items-center gap-1">
+                <input type="date" value={fHireFrom} onChange={(e) => setFHireFrom(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm" />
+                <span className="text-gray-400 text-xs">→</span>
+                <input type="date" value={fHireTo} onChange={(e) => setFHireTo(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm" />
+              </div>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs text-gray-500">Date de sortie (du → au)</label>
+              <div className="mt-1 flex items-center gap-1">
+                <input type="date" value={fExitFrom} onChange={(e) => setFExitFrom(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm" />
+                <span className="text-gray-400 text-xs">→</span>
+                <input type="date" value={fExitTo} onChange={(e) => setFExitTo(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm" />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="mt-8 text-center text-sm text-gray-500">Loading...</div>
       ) : (
+        <div>
         <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 bg-white">
           <table className="w-full text-sm">
             <thead className="border-b border-gray-200 bg-gray-50">
               <tr>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Matricule</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Section</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">Poste/Fonction</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Pointeuse</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Shift</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Active</th>
@@ -215,11 +448,11 @@ export function EmployeesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((emp) => (
+              {paged.map((emp) => (
                 <tr key={emp.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedEmp(emp); setPreCalc(null); setCalcResult(null); setRubInputs({}); }}>
                   <td className="px-4 py-3 font-mono text-xs text-gray-700">{emp.matricule}</td>
                   <td className="px-4 py-3 font-medium text-gray-900">{emp.nom} {emp.prenom}</td>
-                  <td className="px-4 py-3 text-gray-600">{emp.section || "—"}</td>
+                  <td className="px-4 py-3 text-gray-600">{emp.poste_name || "—"}</td>
                   <td className="px-4 py-3">
                     {emp.pointeuse_pin ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
@@ -255,9 +488,33 @@ export function EmployeesPage() {
             </tbody>
           </table>
         </div>
-      )}
 
-      {/* Employee detail modal */}
+        {/* Pagination controls */}
+        {totalPages > 1 && (
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-xs text-gray-500">
+              Page {currentPage + 1} / {totalPages || 1} — {totalCount} employés
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
+                disabled={currentPage === 0}
+                className="px-3 py-1 text-xs rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-50"
+              >
+                ← Précédent
+              </button>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages - 1, p + 1))}
+                disabled={currentPage >= totalPages - 1}
+                className="px-3 py-1 text-xs rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-50"
+              >
+                Suivant →
+              </button>
+            </div>
+          </div>
+        )}
+        </div>
+      )}
       {selectedEmp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setSelectedEmp(null)}>
           <div className="max-h-[90vh] w-[900px] max-w-[95vw] overflow-hidden rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
@@ -277,6 +534,7 @@ export function EmployeesPage() {
                 { key: "family", label: "Famille", icon: null },
                 { key: "attendance", label: "Attendance", icon: Clock },
                 { key: "salary", label: "Salary", icon: Calculator },
+                { key: "salary_history", label: "Historique salaire", icon: History },
                 { key: "primes", label: "Primes", icon: DollarSign },
                 { key: "leave", label: "Congés", icon: null },
                 { key: "loans", label: "Prêts", icon: null },
@@ -284,7 +542,7 @@ export function EmployeesPage() {
               ].map(({ key, label, icon: Icon }) => (
                 <button
                   key={key}
-                  onClick={() => setDetailTab(key as "info" | "attendance" | "salary" | "primes" | "family" | "leave" | "loans" | "events")}
+                  onClick={() => setDetailTab(key as "info" | "attendance" | "salary" | "salary_history" | "primes" | "family" | "leave" | "loans" | "events")}
                   className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 ${
                     detailTab === key ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"
                   }`}
@@ -432,12 +690,12 @@ export function EmployeesPage() {
               {detailTab === "salary" && (
                 <div>
                   <div className="rounded-lg border border-gray-200 p-4 mb-4">
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="month"
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                      <PeriodSelector
                         value={calcPeriod}
-                        onChange={(e) => setCalcPeriod(e.target.value)}
-                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        onChange={setCalcPeriod}
+                        availablePeriods={salaryPeriods}
+                        label="Période de calcul"
                       />
                       <button
                         onClick={handleCalculate}
@@ -607,30 +865,101 @@ export function EmployeesPage() {
                     )}
                   </div>
 
-                  <div>
-                    <h4 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
-                      <History className="h-3 w-3" /> SALARY HISTORY
+                  {/* Selected period details */}
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <h4 className="text-xs font-semibold text-gray-500 mb-3 flex items-center gap-1">
+                      <Calendar className="h-3 w-3" /> DÉTAILS DE LA PÉRIODE SÉLECTIONNÉE — {calcPeriod}
                     </h4>
-                    {salaryHistory.length === 0 ? (
-                      <p className="text-sm text-gray-400">No salary history yet</p>
-                    ) : (
-                      <div className="space-y-1.5">
-                        {salaryHistory.map((h, i) => (
-                          <div key={i} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
-                            <div className="flex items-center gap-3">
-                              <span className="font-mono text-xs text-gray-500">{String(h.period ?? "—")}</span>
-                              <span className="text-gray-700">Net: {formatCurrency(Number(h.net_payer ?? 0))}</span>
-                            </div>
-                            <div className="flex gap-3 text-xs text-gray-500">
-                              <span>Brut: {formatCurrency(Number(h.total_brut ?? 0))}</span>
-                              <span>IRG: {formatCurrency(Number(h.irg ?? 0))}</span>
-                              <span className="text-gray-400">{String(h.calculated_at ?? "").split(" ")[0]}</span>
-                            </div>
+                    {loadingPayslip ? (
+                      <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-blue-600" /></div>
+                    ) : selectedPayslip?.lines && selectedPayslip.lines.length > 0 ? (
+                      <div>
+                        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          <div className="rounded bg-gray-50 p-2 text-center">
+                            <p className="text-xs text-gray-500">Brut</p>
+                            <p className="text-sm font-semibold text-gray-800">{formatCurrency(selectedPayslip.total_brut)}</p>
                           </div>
-                        ))}
+                          <div className="rounded bg-gray-50 p-2 text-center">
+                            <p className="text-xs text-gray-500">Net</p>
+                            <p className="text-sm font-semibold text-green-700">{formatCurrency(selectedPayslip.net_payer)}</p>
+                          </div>
+                          <div className="rounded bg-gray-50 p-2 text-center">
+                            <p className="text-xs text-gray-500">IRG</p>
+                            <p className="text-sm font-semibold text-red-600">{formatCurrency(selectedPayslip.irg)}</p>
+                          </div>
+                          <div className="rounded bg-gray-50 p-2 text-center">
+                            <p className="text-xs text-gray-500">Retenues</p>
+                            <p className="text-sm font-semibold text-gray-800">{formatCurrency(selectedPayslip.total_retenues)}</p>
+                          </div>
+                          <div className="rounded bg-gray-50 p-2 text-center">
+                            <p className="text-xs text-gray-500">Base cotisable</p>
+                            <p className="text-sm font-semibold text-gray-800">{formatCurrency(selectedPayslip.base_cotisable)}</p>
+                          </div>
+                          <div className="rounded bg-gray-50 p-2 text-center">
+                            <p className="text-xs text-gray-500">Base imposable</p>
+                            <p className="text-sm font-semibold text-gray-800">{formatCurrency(selectedPayslip.base_imposable)}</p>
+                          </div>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto">
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-gray-50 text-left">
+                              <tr>
+                                <th className="px-2 py-1 font-medium text-gray-600">Code</th>
+                                <th className="px-2 py-1 text-right font-medium text-gray-600">Montant</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {selectedPayslip.lines.map((line, i) => (
+                                <tr key={i} className="hover:bg-gray-50">
+                                  <td className="px-2 py-1 font-mono text-gray-700">{line.code}</td>
+                                  <td className="px-2 py-1 text-right text-gray-700">{formatCurrency(line.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
+                    ) : (
+                      <p className="text-sm text-gray-400">Aucune fiche de paie historique pour {calcPeriod}.</p>
                     )}
                   </div>
+
+                  <div>
+                    <h4 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
+                      <History className="h-3 w-3" /> HISTORIQUE DES SALAIRES
+                      {salaryHistory.length > 0 && salaryHistory[0]?.source === "imported" && (
+                        <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] text-blue-700">Importé</span>
+                      )}
+                    </h4>
+                    {(() => {
+                      const filtered = salaryHistory.filter((h) => h.period === calcPeriod);
+                      return filtered.length === 0 ? (
+                        <p className="text-sm text-gray-400">Aucun historique pour {calcPeriod}</p>
+                      ) : (
+                        <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                          {filtered.map((h, i) => (
+                            <div key={i} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
+                              <div className="flex items-center gap-3">
+                                <span className="font-mono text-xs text-gray-500">{String(h.period ?? "—")}</span>
+                                <span className="text-gray-700">Net: {formatCurrency(Number(h.net_payer ?? 0))}</span>
+                              </div>
+                              <div className="flex gap-3 text-xs text-gray-500">
+                                <span>Brut: {formatCurrency(Number(h.total_brut ?? 0))}</span>
+                                <span>IRG: {formatCurrency(Number(h.irg ?? 0))}</span>
+                                <span className="text-gray-400">{h.calculated_at ? String(h.calculated_at).split(" ")[0] : "Importé"}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+              {detailTab === "salary_history" && selectedEmp && (
+                <div>
+                  <h3 className="mb-3 text-sm font-semibold text-gray-900">Historique des salaires</h3>
+                  <SalaryHistoryPanel employeeId={selectedEmp.id} />
                 </div>
               )}
             </div>
@@ -643,11 +972,18 @@ export function EmployeesPage() {
 
 function EmployeeInfoTab({ emp }: { emp: EmployeeSummary }) {
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getEmployeeDetail(emp.id).then(setDetail).catch(console.error);
+    setDetail(null);
+    setError(null);
+    api.getEmployeeDetail(emp.id).then(setDetail).catch((e) => {
+      console.error(e);
+      setError(String(e));
+    });
   }, [emp.id]);
 
+  if (error) return <div className="py-8 text-center text-sm text-red-600">Erreur: {error}</div>;
   if (!detail) return <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
 
   const withLabel = (code: unknown, libelle: unknown): string => {
@@ -715,32 +1051,34 @@ function EmployeeInfoTab({ emp }: { emp: EmployeeSummary }) {
     ["Professionnel", [
       ["Date entrée", val("dte_entree")],
       ["Date sortie", val("dte_sortie")],
-      ["Motif sortie", val("motif_sort")],
+      ["Motif sortie", withLabel(detail.motif_sort, null)],
       ["Contrat du", val("dte_cont_d")],
       ["Contrat au", val("dte_cont_f")],
       ["Date reprise", val("dte_repris")],
+      ["Fonction", withLabel(detail.sect1, detail.fonction_libelle)],
       ["Catégorie", withLabel(detail.categorie, detail.categorie_libelle)],
+      ["Catégorie socio-pro", withLabel(detail.categ_sp, detail.categ_sp_libelle)],
       ["Section", withLabel(detail.section, detail.section_libelle)],
       ["Échelon", val("echelon")],
       ["Classe", val("classe")],
-      ["Structure", withLabel(detail.structure, detail.structure_libelle)],
+      ["Structure/Département", withLabel(detail.structure, detail.structure_libelle)],
       ["Unité", withLabel(detail.unite, detail.unite_libelle)],
       ["Affectation", withLabel(detail.affectatio, detail.affectatio_libelle)],
       ["Contrat", withLabel(detail.contrat, detail.contrat_libelle)],
-      ["Catégorie spéciale", val("categ_sp")],
-      ["Diplôme", val("diplome")],
+      ["Diplôme", withLabel(detail.diplome, detail.diplome_libelle)],
+      ["Service (AT1)", withLabel(detail.attrib1, detail.attrib1_libelle)],
+      ["Département (AT2)", withLabel(detail.attrib2, detail.attrib2_libelle)],
+      ["Lieu (AT3)", withLabel(detail.attrib3, detail.attrib3_libelle)],
       ["Grille", val("no_grille")],
       ["Code grille", val("code_grill")],
-      ["Attribut 1", val("attrib1")],
-      ["Attribut 2", val("attrib2")],
-      ["Attribut 3", val("attrib3")],
     ]],
-    ["Sécurité sociale", [
+    ["Sécurité sociale & Banque", [
       ["N° SS", val("n_secu_sle")],
       ["N° CNAS", val("no_cnas")],
       ["Code CNAS", val("code_cnas")],
       ["Code IRG", val("code_irg")],
       ["N° Compte", val("no_compte")],
+      ["Banque", withLabel(detail.org_payeur, detail.banque_libelle)],
       ["Mutuelle", val("no_mutuel")],
       ["Mutuelle depuis", val("mutu_dted")],
       ["Mutuelle jusqu'à", val("mutu_dtef")],

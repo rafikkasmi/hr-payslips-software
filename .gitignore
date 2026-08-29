@@ -26,6 +26,8 @@ pcpaie_tmp
 # Python audit scripts (temporary)
 audit_*.py
 check_*.py
+test_*.py
+insert_*.py
 
 # Editor directories and files
 .vscode/*

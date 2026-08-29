@@ -11,6 +11,8 @@ import { SalaryPage } from "./components/SalaryPage";
 import { AttendancePage } from "./components/AttendancePage";
 import { DashboardPage } from "./components/DashboardPage";
 import { PostesPage } from "./components/PostesPage";
+import { RubriquesPage } from "./components/RubriquesPage";
+import { SettingsPage } from "./components/SettingsPage";
 
 function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -54,12 +56,14 @@ function App() {
         {page === "dashboard" && <DashboardPage status={status} />}
         {page === "employees" && <EmployeesPage />}
         {page === "postes" && <PostesPage />}
+        {page === "rubriques" && <RubriquesPage />}
         {page === "shifts" && <ShiftsPage />}
         {page === "pointeuse" && <PointeusePage />}
         {page === "attendance" && <AttendancePage />}
         {page === "leaves" && <LeavesPage />}
         {page === "bonuses" && <BonusesPage />}
         {page === "salary" && <SalaryPage />}
+        {page === "settings" && <SettingsPage />}
       </main>
     </div>
   );
