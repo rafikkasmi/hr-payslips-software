@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "../lib/api";
 import {
   Search, Save, X, Edit2, Trash2, Loader2, Calculator,
@@ -671,22 +671,132 @@ function SettingRubSelect({ label, hint, value, onChange, rubriques }: {
   onChange: (v: string) => void;
   rubriques: RubriqueRef[];
 }) {
+  const [showModal, setShowModal] = useState(false);
+  const selected = rubriques.find(r => r.code === value);
   return (
     <div>
       <label className="block text-xs font-medium text-gray-700">{label}</label>
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+      <button
+        type="button"
+        onClick={() => setShowModal(true)}
+        className="mt-1 flex w-full items-center justify-between rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none hover:bg-gray-50"
       >
-        <option value="">— Aucune —</option>
-        {rubriques.slice(0, 500).map(r => (
-          <option key={r.code} value={r.code}>
-            R{r.code} — {r.libelle || "(sans libellé)"} (cl{r.classe})
-          </option>
-        ))}
-      </select>
+        <span className={selected ? "text-gray-900" : "text-gray-400"}>
+          {selected ? `R${selected.code} — ${selected.libelle || "(sans libellé)"}` : "— Sélectionner une rubrique —"}
+        </span>
+        <Search className="h-4 w-4 text-gray-400" />
+      </button>
       {hint && <p className="mt-0.5 text-[10px] text-gray-400">{hint}</p>}
+      {showModal && (
+        <RubriquePickerModal
+          rubriques={rubriques}
+          selectedCode={value}
+          onSelect={(code) => { onChange(code); setShowModal(false); }}
+          onClose={() => setShowModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// RubriquePickerModal — Modal de sélection de rubrique avec recherche rapide
+// ============================================================
+
+export function RubriquePickerModal({ rubriques, selectedCode, onSelect, onClose }: {
+  rubriques: { code: string; libelle: string | null; classe: number | null; is_brut?: number | null; is_impos?: number | null; is_secu_s?: number | null }[];
+  selectedCode?: string;
+  onSelect: (code: string) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    if (!s) return rubriques;
+    return rubriques.filter(r =>
+      r.code.includes(s) ||
+      (r.libelle ?? "").toLowerCase().includes(s)
+    );
+  }, [rubriques, search]);
+
+  // Keyboard navigation
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") onClose();
+    if (e.key === "Enter" && filtered.length > 0) {
+      onSelect(filtered[0].code);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl bg-white shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+          <h3 className="text-sm font-bold text-gray-900">Sélectionner une rubrique</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="border-b border-gray-100 p-3">
+          <div className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 focus-within:border-blue-500">
+            <Search className="h-4 w-4 text-gray-400" />
+            <input
+              ref={searchRef}
+              type="text"
+              placeholder="Tapez un code (ex: 500) ou un libellé (ex: salaire)..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="flex-1 text-sm focus:outline-none"
+            />
+            {search && (
+              <button onClick={() => setSearch("")} className="text-gray-400 hover:text-gray-600">
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[10px] text-gray-400">{filtered.length} rubrique(s) trouvée(s) sur {rubriques.length} · Entrée = sélectionner la première · Échap = fermer</p>
+        </div>
+
+        {/* List */}
+        <div className="flex-1 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <p className="py-8 text-center text-sm text-gray-400">Aucune rubrique trouvée</p>
+          ) : (
+            filtered.map(r => {
+              const isSelected = r.code === selectedCode;
+              return (
+                <button
+                  key={r.code}
+                  onClick={() => onSelect(r.code)}
+                  className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm border-b border-gray-50 transition-colors ${
+                    isSelected ? "bg-blue-50 text-blue-700" : "hover:bg-blue-50/50"
+                  }`}
+                >
+                  <span className="font-mono text-gray-400 w-12">R{r.code}</span>
+                  <span className="flex-1 truncate text-gray-700">{r.libelle || "(sans libellé)"}</span>
+                  <span className="text-[10px] text-gray-400">cl{r.classe}</span>
+                  {r.is_brut === 1 && <span className="text-[10px] text-blue-600">brut</span>}
+                  {r.is_secu_s === 1 && <span className="text-[10px] text-purple-600">cotis</span>}
+                  {r.is_impos === 1 && <span className="text-[10px] text-orange-600">impos</span>}
+                  {isSelected && <CheckCircle2 className="h-4 w-4 text-blue-600" />}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
     </div>
   );
 }
