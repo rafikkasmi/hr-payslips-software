@@ -10,8 +10,19 @@ pub fn get_db_path(app_data_dir: &str) -> String {
 
 pub fn init_db(db_path: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open(db_path)?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=30000;")?;
+    conn.execute_batch(
+        r#"
+        PRAGMA journal_mode=WAL;
+        PRAGMA foreign_keys=ON;
+        PRAGMA synchronous=NORMAL;
+        PRAGMA cache_size=-64000;
+        PRAGMA mmap_size=268435456;
+        PRAGMA temp_store=MEMORY;
+        PRAGMA busy_timeout=5000;
+        "#,
+    )?;
     create_schema(&conn)?;
+    create_indexes(&conn)?;
     Ok(conn)
 }
 
@@ -23,6 +34,67 @@ pub fn is_initialized(conn: &Connection) -> bool {
     )
     .map(|v| v == "true")
     .unwrap_or(false)
+}
+
+fn create_indexes(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+        -- Employees
+        CREATE INDEX IF NOT EXISTS idx_employees_actif ON employees(actif);
+        CREATE INDEX IF NOT EXISTS idx_employees_nom ON employees(nom, prenom);
+        CREATE INDEX IF NOT EXISTS idx_employees_section ON employees(section);
+        CREATE INDEX IF NOT EXISTS idx_employees_structure ON employees(structure);
+        CREATE INDEX IF NOT EXISTS idx_employees_poste ON employees(poste_id);
+
+        -- Salary calculations
+        CREATE INDEX IF NOT EXISTS idx_salary_emp_period ON salary_calculations(employee_id, period);
+        CREATE INDEX IF NOT EXISTS idx_salary_period ON salary_calculations(period);
+
+        -- Salary lines
+        CREATE INDEX IF NOT EXISTS idx_salary_lines_calc ON salary_lines(calculation_id);
+
+        -- Employee rubriques
+        CREATE INDEX IF NOT EXISTS idx_emp_rub_emp ON employee_rubriques(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_emp_rub_code ON employee_rubriques(rubrique_code);
+
+        -- Bonuses
+        CREATE INDEX IF NOT EXISTS idx_bonuses_status ON bonuses(status);
+        CREATE INDEX IF NOT EXISTS idx_bonuses_period ON bonuses(pay_period);
+        CREATE INDEX IF NOT EXISTS idx_bonuses_target ON bonuses(target_type, target_value);
+
+        -- Bonus assignments
+        CREATE INDEX IF NOT EXISTS idx_bonus_assign_bonus ON bonus_assignments(bonus_id);
+        CREATE INDEX IF NOT EXISTS idx_bonus_assign_emp ON bonus_assignments(employee_id);
+
+        -- Bonus applications
+        CREATE INDEX IF NOT EXISTS idx_bonus_app_bonus_emp ON bonus_applications(bonus_id, employee_id);
+        CREATE INDEX IF NOT EXISTS idx_bonus_app_period ON bonus_applications(period);
+
+        -- Bonus skips
+        CREATE INDEX IF NOT EXISTS idx_bonus_skips_period ON bonus_skips(period);
+        CREATE INDEX IF NOT EXISTS idx_bonus_skips_bonus ON bonus_skips(bonus_id);
+
+        -- Attendance
+        CREATE INDEX IF NOT EXISTS idx_attendance_emp_date ON attendance(employee_id, punch_datetime);
+        CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(punch_datetime);
+
+        -- Leaves
+        CREATE INDEX IF NOT EXISTS idx_leaves_emp ON leaves(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_leaves_dates ON leaves(start_date, end_date);
+
+        -- Overtime
+        CREATE INDEX IF NOT EXISTS idx_overtime_emp_date ON overtime_entries(employee_id, date);
+        CREATE INDEX IF NOT EXISTS idx_overtime_monthly_emp_period ON overtime_monthly(employee_id, period);
+
+        -- Paies (legacy)
+        CREATE INDEX IF NOT EXISTS idx_paies_emp ON paies(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_paies_mois ON paies(mois);
+
+        -- Postes
+        CREATE INDEX IF NOT EXISTS idx_poste_rub_poste ON poste_rubriques(poste_id);
+        "#,
+    )?;
+    Ok(())
 }
 
 fn create_schema(conn: &Connection) -> rusqlite::Result<()> {

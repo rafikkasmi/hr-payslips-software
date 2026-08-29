@@ -106,6 +106,8 @@ export interface AppliedBonus {
   rubrique_code: string | null;
   is_percentage: boolean;
   computed_amount: number;
+  is_imposable: boolean;
+  is_cotisable: boolean;
 }
 
 export interface CalcResult {
@@ -345,6 +347,9 @@ export const api = {
   saveSalaryCalculation: (result: CalcResult) =>
     invoke<number>("save_salary_calculation", { result }),
 
+  getSavedCalculation: (employeeId: number, period: string) =>
+    invoke<CalcResult | null>("get_saved_calculation", { employeeId, period }),
+
   getSalaryHistory: (employeeId: number) =>
     invoke<Record<string, unknown>[]>("get_salary_history", { employeeId }),
 
@@ -474,6 +479,13 @@ export const api = {
       isSecuS: isSecuS === false ? 0 : 1,
     }),
 
+  updateRubriqueFlags: (code: string, flags: { isSecuS?: boolean; isImpos?: boolean; isBrut?: boolean }) =>
+    invoke<void>("update_rubrique_flags", {
+      code,
+      isSecuS: flags.isSecuS ?? null,
+      isImpos: flags.isImpos ?? null,
+      isBrut: flags.isBrut ?? null,
+    }),
   getLookupValues: (tableName?: string) =>
     invoke<Record<string, unknown>[]>("get_lookup_values", {
       tableName: tableName ?? null,

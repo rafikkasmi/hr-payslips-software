@@ -156,7 +156,7 @@ struct EmployeeSummary {
 }
 
 #[tauri::command]
-fn get_employees(state: State<AppState>) -> Result<Vec<EmployeeSummary>, String> {
+async fn get_employees(state: State<'_, AppState>) -> Result<Vec<EmployeeSummary>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -614,14 +614,19 @@ fn assign_shift(
 
 // Salary calculation
 #[tauri::command]
-fn calculate_employee_salary(
-    state: State<AppState>,
+async fn calculate_employee_salary(
+    state: State<'_, AppState>,
     employee_id: i64,
     period: String,
     input_values: HashMap<String, (f64, f64)>,
 ) -> Result<CalcResult, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    calculate_salary(&conn, employee_id, &period, &input_values)
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+        calculate_salary(&conn, employee_id, &period, &input_values)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -631,6 +636,46 @@ fn save_salary_calculation(
 ) -> Result<i64, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     save_calculation(&conn, &result)
+}
+
+#[tauri::command]
+fn get_saved_calculation(
+    state: State<AppState>,
+    employee_id: i64,
+    period: String,
+) -> Result<Option<CalcResult>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let row = conn.query_row(
+        r#"SELECT id, employee_id, matricule, period, results_json,
+                  total_brut, total_gains, total_retenues, net_payer,
+                  base_cotisable, base_imposable, irg
+           FROM salary_calculations WHERE employee_id=? AND period=? LIMIT 1"#,
+        rusqlite::params![employee_id, period],
+        |r| {
+            let results_json: String = r.get(4)?;
+            let lines: Vec<calculator::CalcLine> = serde_json::from_str(&results_json).unwrap_or_default();
+            Ok(CalcResult {
+                employee_id: r.get(1)?,
+                matricule: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                employee_name: String::new(),
+                period: r.get(3)?,
+                lines,
+                total_brut: r.get(5)?,
+                total_gains: r.get(6)?,
+                total_retenues: r.get(7)?,
+                net_payer: r.get(8)?,
+                base_cotisable: r.get(9)?,
+                base_imposable: r.get(10)?,
+                irg: r.get(11)?,
+                applied_bonuses: Vec::new(),
+            })
+        },
+    );
+    match row {
+        Ok(result) => Ok(Some(result)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -795,8 +840,10 @@ struct Bonus {
 }
 
 #[tauri::command]
-fn get_bonuses(state: State<AppState>) -> Result<Vec<Bonus>, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+async fn get_bonuses(state: State<'_, AppState>) -> Result<Vec<Bonus>, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
             r#"SELECT id, title, description, bonus_type, amount, is_percentage,
@@ -849,6 +896,9 @@ fn get_bonuses(state: State<AppState>) -> Result<Vec<Bonus>, String> {
         bonuses.push(b);
     }
     Ok(bonuses)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1269,8 +1319,10 @@ fn get_attendance(
 
 // Rubriques
 #[tauri::command]
-fn get_rubriques(state: State<AppState>) -> Result<Vec<serde_json::Value>, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+async fn get_rubriques(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
@@ -1303,6 +1355,9 @@ fn get_rubriques(state: State<AppState>) -> Result<Vec<serde_json::Value>, Strin
         results.push(row.map_err(|e| e.to_string())?);
     }
     Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1350,6 +1405,36 @@ fn create_rubrique(
     .map_err(|e| e.to_string())?;
 
     Ok(code_str)
+}
+
+#[tauri::command]
+fn update_rubrique_flags(
+    state: State<AppState>,
+    code: String,
+    is_secu_s: Option<bool>,
+    is_impos: Option<bool>,
+    is_brut: Option<bool>,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+
+    let mut sets: Vec<String> = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(v) = is_secu_s { sets.push("is_secu_s = ?".into()); params.push(Box::new(v as i64)); }
+    if let Some(v) = is_impos { sets.push("is_impos = ?".into()); params.push(Box::new(v as i64)); }
+    if let Some(v) = is_brut { sets.push("is_brut = ?".into()); params.push(Box::new(v as i64)); }
+
+    if sets.is_empty() {
+        return Ok(());
+    }
+
+    let sql = format!("UPDATE rubriques SET {} WHERE code = ?", sets.join(", "));
+    params.push(Box::new(code));
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    conn.execute(&sql, param_refs.as_slice())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 // Lookup values (departments, regions, areas)
@@ -1490,12 +1575,14 @@ fn delete_month_calculations(state: State<AppState>, period: String) -> Result<u
 
 // Get salary history for all employees (or filtered by period)
 #[tauri::command]
-fn get_all_salary_history(
-    state: State<AppState>,
+async fn get_all_salary_history(
+    state: State<'_, AppState>,
     period: Option<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let mut results = Vec::new();
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+        let mut results = Vec::new();
 
     // New calculations from our app
     if let Some(ref p) = period {
@@ -1541,7 +1628,8 @@ fn get_all_salary_history(
                        e.nom, e.prenom
                        FROM salary_calculations sc
                        LEFT JOIN employees e ON sc.employee_id = e.id
-                       ORDER BY sc.period DESC, e.nom, e.prenom"#)
+                       ORDER BY sc.period DESC, e.nom, e.prenom
+                       LIMIT 500"#)
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| {
@@ -1578,7 +1666,8 @@ fn get_all_salary_history(
                     FROM paies p
                     LEFT JOIN employees e ON p.employee_id = e.id
                     WHERE p.mois != 'TOT-PAIE'
-                    ORDER BY p.mois DESC, e.nom, e.prenom"#)
+                    ORDER BY p.mois DESC, e.nom, e.prenom
+                    LIMIT 500"#)
         .map_err(|e| e.to_string())?;
     let rows2 = stmt2
         .query_map([], |row| {
@@ -1624,6 +1713,9 @@ fn get_all_salary_history(
     }
 
     Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // Get a historical payslip with full rubrique breakdown from PAIES montants
@@ -2382,8 +2474,10 @@ fn compute_weekday_from_date(date_str: &str) -> &'static str {
 // ===== Pre-calc Summary =====
 
 #[tauri::command]
-fn get_pre_calc_summary(state: State<AppState>, employee_id: i64, period: String) -> Result<serde_json::Value, String> {
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+async fn get_pre_calc_summary(state: State<'_, AppState>, employee_id: i64, period: String) -> Result<serde_json::Value, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
 
     // Get employee info
     let emp: serde_json::Value = conn
@@ -2470,6 +2564,9 @@ fn get_pre_calc_summary(state: State<AppState>, employee_id: i64, period: String
         "attendance_days": attendance_days,
         "period": period,
     }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn get_active_bonuses_for_period_inner(conn: &Connection, employee_id: i64, period: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -3015,6 +3112,7 @@ pub fn run() {
             assign_shift,
             calculate_employee_salary,
             save_salary_calculation,
+            get_saved_calculation,
             get_salary_history,
             calculate_all_salaries,
             delete_month_calculations,
@@ -3034,6 +3132,7 @@ pub fn run() {
             get_attendance,
             get_rubriques,
             create_rubrique,
+            update_rubrique_flags,
             get_lookup_values,
             // Postes
             get_postes,
