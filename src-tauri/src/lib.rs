@@ -2914,6 +2914,16 @@ fn update_poste_rubrique(state: State<AppState>, poste_id: i64, rubrique_code: S
 }
 
 #[tauri::command]
+fn delete_poste_rubrique(state: State<AppState>, poste_id: i64, rubrique_code: String) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM poste_rubriques WHERE poste_id=? AND rubrique_code=?",
+        rusqlite::params![poste_id, rubrique_code],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn assign_employee_to_poste(state: State<AppState>, employee_id: i64, poste_id: Option<i64>) -> Result<(), String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute("UPDATE employees SET poste_id=?, updated_at=datetime('now') WHERE id=?",
@@ -4101,6 +4111,7 @@ pub fn run() {
             update_poste,
             delete_poste,
             update_poste_rubrique,
+            delete_poste_rubrique,
             assign_employee_to_poste,
             sync_postes_from_fnc,
             recompute_poste_stats,

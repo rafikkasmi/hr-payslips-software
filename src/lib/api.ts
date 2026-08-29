@@ -639,6 +639,8 @@ export const api = {
     invoke<void>("delete_poste", { posteId }),
   updatePosteRubrique: (posteId: number, rubriqueCode: string, defaultValue: number) =>
     invoke<void>("update_poste_rubrique", { posteId, rubriqueCode, defaultValue }),
+  deletePosteRubrique: (posteId: number, rubriqueCode: string) =>
+    invoke<void>("delete_poste_rubrique", { posteId, rubriqueCode }),
   assignEmployeeToPoste: (employeeId: number, posteId: number | null) =>
     invoke<void>("assign_employee_to_poste", { employeeId, posteId }),
   syncPostesFromFnc: () => invoke<number>("sync_postes_from_fnc"),
