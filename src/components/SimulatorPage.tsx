@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { api, type CalcResult, type CalcLine, type EmployeeSummary } from "../lib/api";
 import { formatCurrency } from "../lib/utils";
 import { PayslipPDF } from "./PayslipPDF";
+import { EmployeePickerModal } from "./EmployeePickerModal";
 import {
   Calculator, Search, Loader2, RotateCcw, FileText,
-  ChevronDown, ChevronRight, Trash2, Zap, ArrowRight,
+  ChevronDown, ChevronRight, Trash2, Zap, ArrowRight, Users,
 } from "lucide-react";
 
 interface RubInput {
@@ -26,7 +27,6 @@ interface RubriqueMeta {
 
 export function SimulatorPage() {
   const [employees, setEmployees] = useState<EmployeeSummary[]>([]);
-  const [empSearch, setEmpSearch] = useState("");
   const [selectedEmpId, setSelectedEmpId] = useState<number | null>(null);
   const [loadingEmps, setLoadingEmps] = useState(true);
 
@@ -47,6 +47,7 @@ export function SimulatorPage() {
   const [showPayslip, setShowPayslip] = useState(false);
   const [showTValues, setShowTValues] = useState(false);
   const [showCalcChain, setShowCalcChain] = useState(false);
+  const [showEmpModal, setShowEmpModal] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -122,15 +123,6 @@ export function SimulatorPage() {
       }
     })();
   }, []);
-
-  const filteredEmployees = useMemo(() => {
-    const s = empSearch.trim().toLowerCase();
-    if (!s) return employees;
-    return employees.filter(e =>
-      `${e.nom} ${e.prenom}`.toLowerCase().includes(s) ||
-      e.matricule?.toLowerCase().includes(s)
-    );
-  }, [employees, empSearch]);
 
   const selectedEmp = useMemo(
     () => employees.find(e => e.id === selectedEmpId),
@@ -306,17 +298,31 @@ export function SimulatorPage() {
 
       {/* Employee + period bar */}
       <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2">
-        <Search className="h-4 w-4 text-gray-400" />
-        <input
-          type="text"
-          placeholder="Rechercher employé..."
-          value={empSearch}
-          onChange={e => setEmpSearch(e.target.value)}
-          className="w-56 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-        />
+        <button
+          onClick={() => setShowEmpModal(true)}
+          className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700"
+        >
+          <Users className="h-4 w-4" />
+          {selectedEmp ? (
+            <span>
+              {selectedEmp.nom} {selectedEmp.prenom} <span className="font-mono text-xs text-gray-400">({selectedEmp.matricule})</span>
+            </span>
+          ) : (
+            <span className="text-gray-500">Sélectionner un employé...</span>
+          )}
+        </button>
         {selectedEmp && (
-          <span className="text-sm font-medium text-gray-700">
-            {selectedEmp.nom} {selectedEmp.prenom} <span className="font-mono text-xs text-gray-400">({selectedEmp.matricule})</span>
+          <button
+            onClick={() => { setSelectedEmpId(null); setSimRubriques([]); setCalcResult(null); }}
+            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            title="Changer d'employé"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {selectedEmp?.poste_name && (
+          <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700">
+            Profil: {selectedEmp.poste_name}
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
@@ -330,23 +336,7 @@ export function SimulatorPage() {
         </div>
       </div>
 
-      {/* Employee dropdown */}
-      {empSearch && filteredEmployees.length > 0 && (
-        <div className="absolute z-50 max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg" style={{ top: "100px", left: "60px", width: "350px" }}>
-          {filteredEmployees.slice(0, 20).map(emp => (
-            <button
-              key={emp.id}
-              onClick={() => { setSelectedEmpId(emp.id); setEmpSearch(""); }}
-              className="flex w-full items-center justify-between px-3 py-1.5 text-left text-sm hover:bg-blue-50"
-            >
-              <span>{emp.nom} {emp.prenom}</span>
-              <span className="font-mono text-xs text-gray-400">{emp.matricule}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {!selectedEmpId && !empSearch && (
+      {!selectedEmpId && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm text-blue-700">
           Sélectionnez un employé → sa table de simulation se remplit automatiquement avec les rubriques de son profil
         </div>
@@ -685,6 +675,13 @@ export function SimulatorPage() {
       {showPayslip && calcResult && (
         <PayslipPDF result={calcResult} onClose={() => setShowPayslip(false)} />
       )}
+
+      <EmployeePickerModal
+        open={showEmpModal}
+        onClose={() => setShowEmpModal(false)}
+        onSelect={(emp) => setSelectedEmpId(emp.id)}
+        selectedEmpId={selectedEmpId}
+      />
     </div>
   );
 }
