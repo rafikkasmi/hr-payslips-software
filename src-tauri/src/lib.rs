@@ -1892,6 +1892,56 @@ fn test_rubrique_formula(
     }
 }
 
+// ============================================================
+// Salary settings (global parameterization)
+// ============================================================
+
+#[tauri::command]
+fn get_salary_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM salary_settings")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "key": row.get::<_, String>(0)?,
+            "value": row.get::<_, String>(1)?,
+        }))
+    }).map_err(|e| e.to_string())?;
+    let mut settings = serde_json::Map::new();
+    for row in rows {
+        let r = row.map_err(|e| e.to_string())?;
+        settings.insert(r["key"].as_str().unwrap_or("").to_string(), r["value"].clone());
+    }
+    Ok(serde_json::Value::Object(settings))
+}
+
+#[tauri::command]
+fn set_salary_setting(state: State<AppState>, key: String, value: String) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO salary_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+        rusqlite::params![key, value],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_salary_settings(state: State<AppState>, settings: HashMap<String, String>) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for (key, value) in &settings {
+        tx.execute(
+            "INSERT INTO salary_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+            rusqlite::params![key, value],
+        ).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // Lookup values (departments, regions, areas)
 #[tauri::command]
 fn get_lookup_values(
@@ -4032,6 +4082,9 @@ pub fn run() {
             update_rubrique_flags,
             delete_rubrique,
             test_rubrique_formula,
+            get_salary_settings,
+            set_salary_setting,
+            set_salary_settings,
             get_lookup_values,
             // Field mappings
             get_field_mappings,

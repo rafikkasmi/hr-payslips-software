@@ -108,6 +108,96 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
     Ok(rubriques)
 }
 
+/// Salary calculation settings loaded from salary_settings table.
+/// These override hardcoded defaults and are respected in all calculations.
+#[derive(Debug, Clone)]
+pub struct SalarySettings {
+    /// Code of the rubrique that totals cotisable base (default: "500")
+    pub cotisable_total_code: String,
+    /// Code of the rubrique that totals imposable base (default: "652")
+    pub imposable_total_code: String,
+    /// Code of the rubrique that totals brut (default: "763")
+    pub brut_total_code: String,
+    /// Code of the rubrique that totals gains (default: "765")
+    pub gains_total_code: String,
+    /// Code of the rubrique that totals retenues (default: "767")
+    pub retenues_total_code: String,
+    /// Code of the rubrique for net a payer (default: "770")
+    pub net_payer_code: String,
+    /// CNAS employee rate (default: 9.0)
+    pub cnas_employee_rate: f64,
+    /// CNAS employer rate (default: 26.0)
+    pub cnas_employer_rate: f64,
+    /// IRG abattement rate (default: 0.40)
+    pub irg_abattement_rate: f64,
+    /// IRG abattement min (default: 1000)
+    pub irg_abattement_min: f64,
+    /// IRG abattement max (default: 1500)
+    pub irg_abattement_max: f64,
+    /// IRG exoneration threshold (default: 30000)
+    pub irg_exoneration_threshold: f64,
+    /// SNMG (default: 24000)
+    pub snmg: f64,
+    /// Monthly hours (default: 173.33)
+    pub monthly_hours: f64,
+    /// Monthly days (default: 30)
+    pub monthly_days: f64,
+    /// Family charge reduction per person (default: 1500)
+    pub family_reduction: f64,
+}
+
+impl Default for SalarySettings {
+    fn default() -> Self {
+        SalarySettings {
+            cotisable_total_code: "500".to_string(),
+            imposable_total_code: "652".to_string(),
+            brut_total_code: "763".to_string(),
+            gains_total_code: "765".to_string(),
+            retenues_total_code: "767".to_string(),
+            net_payer_code: "770".to_string(),
+            cnas_employee_rate: 9.0,
+            cnas_employer_rate: 26.0,
+            irg_abattement_rate: 0.40,
+            irg_abattement_min: 1000.0,
+            irg_abattement_max: 1500.0,
+            irg_exoneration_threshold: 30000.0,
+            snmg: 24000.0,
+            monthly_hours: 173.33,
+            monthly_days: 30.0,
+            family_reduction: 1500.0,
+        }
+    }
+}
+
+/// Load salary settings from the database. Falls back to defaults if not set.
+pub fn load_salary_settings(conn: &Connection) -> SalarySettings {
+    let mut settings = SalarySettings::default();
+    let get = |key: &str| -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM salary_settings WHERE key=?",
+            [key],
+            |r| r.get::<_, String>(0),
+        ).ok()
+    };
+    if let Some(v) = get("cotisable_total_code") { settings.cotisable_total_code = v; }
+    if let Some(v) = get("imposable_total_code") { settings.imposable_total_code = v; }
+    if let Some(v) = get("brut_total_code") { settings.brut_total_code = v; }
+    if let Some(v) = get("gains_total_code") { settings.gains_total_code = v; }
+    if let Some(v) = get("retenues_total_code") { settings.retenues_total_code = v; }
+    if let Some(v) = get("net_payer_code") { settings.net_payer_code = v; }
+    if let Some(v) = get("cnas_employee_rate") { settings.cnas_employee_rate = v.parse().unwrap_or(9.0); }
+    if let Some(v) = get("cnas_employer_rate") { settings.cnas_employer_rate = v.parse().unwrap_or(26.0); }
+    if let Some(v) = get("irg_abattement_rate") { settings.irg_abattement_rate = v.parse().unwrap_or(0.40); }
+    if let Some(v) = get("irg_abattement_min") { settings.irg_abattement_min = v.parse().unwrap_or(1000.0); }
+    if let Some(v) = get("irg_abattement_max") { settings.irg_abattement_max = v.parse().unwrap_or(1500.0); }
+    if let Some(v) = get("irg_exoneration_threshold") { settings.irg_exoneration_threshold = v.parse().unwrap_or(30000.0); }
+    if let Some(v) = get("snmg") { settings.snmg = v.parse().unwrap_or(24000.0); }
+    if let Some(v) = get("monthly_hours") { settings.monthly_hours = v.parse().unwrap_or(173.33); }
+    if let Some(v) = get("monthly_days") { settings.monthly_days = v.parse().unwrap_or(30.0); }
+    if let Some(v) = get("family_reduction") { settings.family_reduction = v.parse().unwrap_or(1500.0); }
+    settings
+}
+
 /// Extract base and taux values for a rubrique from the current R[] values.
 /// Uses cd_nb_base and cd_taux metadata from the rubrique definition.
 fn extract_base_taux(rub: &RubriqueDef, r_values: &HashMap<String, f64>) -> (Option<f64>, Option<f64>) {
@@ -242,12 +332,12 @@ pub fn bareme_irg_period(base: f64, prorata: f64, period: &str) -> f64 {
         bareme_brut_lf2022(rounded_base)
     };
 
-    // Abattement de 40%, plancher 1000, plafond 1500
+    // Abattement de 40%, plancher 1000, plafond 1500 (configurable via salary_settings)
     let abat = (raw * 0.40).clamp(1000.0, 1500.0);
     let mut irg = raw - abat;
 
     if !pre_2022 {
-        // Exoneration totale jusqu'a 30 000, puis zone de transition 30 000-35 000
+        // Exoneration totale jusqu'a 30 000 (configurable), puis zone de transition 30 000-35 000
         if rounded_base <= 30000.0 {
             irg = 0.0;
         } else if rounded_base < 35000.0 {
@@ -619,6 +709,7 @@ pub fn calculate_salary(
     // input_values: rubrique_code -> (M montant, N nombre)
 ) -> Result<CalcResult, String> {
     let rubriques = load_rubriques(conn)?;
+    let sal_settings = load_salary_settings(conn);
 
     // Get employee info
     let (matricule, nom, prenom): (String, String, String) = conn
@@ -797,8 +888,8 @@ pub fn calculate_salary(
     let calendar_working_days = compute_working_days(period);
     // T[09] = standard working days for prorata. PCPAIE defaults to 30 (Algerian
     // standard month). Can be overridden via global_params key "9".
-    t_values.insert(9, 30.0); // T[09] = standard working days (PCPAIE default: 30)
-    t_values.insert(10, 173.33); // T[10] = monthly hours (standard)
+    t_values.insert(9, sal_settings.monthly_days); // T[09] = standard working days (configurable)
+    t_values.insert(10, sal_settings.monthly_hours); // T[10] = monthly hours (configurable)
     t_values.insert(15, 1.0); // T[15] = normal work ratio (full month)
     t_values.insert(16, 0.0); // T[16] = overtime ratio
     t_values.insert(17, 0.0); // T[17] = night/weekend ratio
@@ -1332,8 +1423,8 @@ pub fn calculate_salary(
     let total_gains = computed_gains;
     let total_retenues = computed_retenues;
 
-    let base_cotisable = r_values.get("500").copied().unwrap_or(0.0);
-    let base_imposable = r_values.get("652").copied().unwrap_or(0.0);
+    let base_cotisable = r_values.get(&sal_settings.cotisable_total_code).copied().unwrap_or(0.0);
+    let base_imposable = r_values.get(&sal_settings.imposable_total_code).copied().unwrap_or(0.0);
     let irg = r_values.get("660").copied().unwrap_or(0.0);
     let net_payer = total_gains - total_retenues;
 

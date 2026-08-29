@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { api } from "../lib/api";
 import {
   Search, Save, X, Edit2, Trash2, Loader2, Calculator,
-  Plus, FlaskConical, AlertCircle, CheckCircle2,
+  Plus, FlaskConical, AlertCircle, CheckCircle2, Settings, ListChecks,
 } from "lucide-react";
 
 const classeLabels: Record<number, { label: string; color: string }> = {
@@ -54,6 +54,7 @@ export function RubriquesPage() {
   const [newLibelle, setNewLibelle] = useState("");
   const [newClasse, setNewClasse] = useState(1);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [activeTab, setActiveTab] = useState<"rubriques" | "settings">("rubriques");
 
   const loadRubriques = useCallback(async () => {
     setLoading(true);
@@ -187,6 +188,32 @@ export function RubriquesPage() {
 
   return (
     <div className="p-6 space-y-4">
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab("rubriques")}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "rubriques" ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <ListChecks className="h-4 w-4" />
+          Rubriques
+        </button>
+        <button
+          onClick={() => setActiveTab("settings")}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "settings" ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Settings className="h-4 w-4" />
+          Paramètres Salaires
+        </button>
+      </div>
+
+      {activeTab === "settings" && <SalarySettingsPanel rubriques={rubriques} />}
+
+      {activeTab === "rubriques" && (
+      <>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Rubriques de Paie</h1>
@@ -397,6 +424,269 @@ export function RubriquesPage() {
           </div>
         </div>
       )}
+      </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Salary Settings Panel — Paramètres de calcul des salaires
+// ============================================================
+
+interface RubriqueRef {
+  code: string;
+  libelle: string | null;
+  classe: number | null;
+  is_brut: number | null;
+  is_impos: number | null;
+  is_secu_s: number | null;
+  is_total: number | null;
+}
+
+function SalarySettingsPanel({ rubriques }: { rubriques: RubriqueRef[] }) {
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await api.getSalarySettings();
+        setSettings(s);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const defaults: Record<string, string> = {
+    cotisable_total_code: "500",
+    imposable_total_code: "652",
+    brut_total_code: "763",
+    gains_total_code: "765",
+    retenues_total_code: "767",
+    net_payer_code: "770",
+    cnas_employee_rate: "9",
+    cnas_employer_rate: "26",
+    irg_abattement_rate: "0.40",
+    irg_abattement_min: "1000",
+    irg_abattement_max: "1500",
+    irg_exoneration_threshold: "30000",
+    snmg: "24000",
+    monthly_hours: "173.33",
+    monthly_days: "30",
+    family_reduction: "1500",
+  };
+
+  const val = (key: string) => settings[key] ?? defaults[key] ?? "";
+
+  const handleChange = (key: string, value: string) => {
+    setSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      // Merge with defaults for any missing keys
+      const toSave: Record<string, string> = {};
+      for (const key of Object.keys(defaults)) {
+        toSave[key] = val(key);
+      }
+      // Also save any extra keys
+      for (const key of Object.keys(settings)) {
+        if (!toSave[key]) toSave[key] = settings[key];
+      }
+      await api.setSalarySettings(toSave);
+      setMessage({ type: "success", text: "Paramètres enregistrés avec succès" });
+    } catch (e) {
+      setMessage({ type: "error", text: `Erreur: ${e}` });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Helper to find rubrique by code
+  const findRub = (code: string) => rubriques.find(r => r.code === code);
+  const rubLabel = (code: string) => {
+    const r = findRub(code);
+    return r?.libelle ? `— ${r.libelle}` : "";
+  };
+
+  // Rubriques cotisables (is_secu_s = 1)
+  const cotisables = rubriques.filter(r => r.is_secu_s === 1);
+  // Rubriques imposables (is_impos = 1)
+  const imposables = rubriques.filter(r => r.is_impos === 1);
+  // Rubriques brut (is_brut = 1)
+  const bruts = rubriques.filter(r => r.is_brut === 1);
+  // Rubriques total (is_total = 1)
+  const totals = rubriques.filter(r => r.is_total === 1);
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">Paramètres de Calcul des Salaires</h2>
+          <p className="text-sm text-gray-500">Configuration globale appliquée à tous les calculs de paie</p>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          Enregistrer
+        </button>
+      </div>
+
+      {message && (
+        <div className={`rounded-lg p-3 text-sm ${message.type === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+          {message.type === "success" ? <CheckCircle2 className="inline h-4 w-4 mr-1" /> : <AlertCircle className="inline h-4 w-4 mr-1" />}
+          {message.text}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Section 1: Rubriques système (codes de totalisation) */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <h3 className="mb-3 text-sm font-bold text-gray-700 border-b pb-2">Rubriques Système — Codes de Totalisation</h3>
+          <p className="mb-3 text-xs text-gray-400">Définissez quelles rubriques totalisent les bases de calcul</p>
+          <div className="space-y-3">
+            <SettingRubSelect label="Rubrique total cotisable" hint="Base pour CNAS (défaut: R500)" value={val("cotisable_total_code")} onChange={v => handleChange("cotisable_total_code", v)} rubriques={rubriques} />
+            <SettingRubSelect label="Rubrique total imposable" hint="Base pour IRG (défaut: R652)" value={val("imposable_total_code")} onChange={v => handleChange("imposable_total_code", v)} rubriques={rubriques} />
+            <SettingRubSelect label="Rubrique total brut" hint="Brut total (défaut: R763)" value={val("brut_total_code")} onChange={v => handleChange("brut_total_code", v)} rubriques={rubriques} />
+            <SettingRubSelect label="Rubrique total gains" hint="Somme des gains (défaut: R765)" value={val("gains_total_code")} onChange={v => handleChange("gains_total_code", v)} rubriques={rubriques} />
+            <SettingRubSelect label="Rubrique total retenues" hint="Somme des retenues (défaut: R767)" value={val("retenues_total_code")} onChange={v => handleChange("retenues_total_code", v)} rubriques={rubriques} />
+            <SettingRubSelect label="Rubrique net à payer" hint="Net à payer (défaut: R770)" value={val("net_payer_code")} onChange={v => handleChange("net_payer_code", v)} rubriques={rubriques} />
+          </div>
+        </div>
+
+        {/* Section 2: Taux et paramètres réglementaires */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <h3 className="mb-3 text-sm font-bold text-gray-700 border-b pb-2">Taux et Paramètres Réglementaires</h3>
+          <p className="mb-3 text-xs text-gray-400">Taux appliqués automatiquement dans les calculs</p>
+          <div className="space-y-3">
+            <SettingInput label="Taux CNAS salarié (%)" hint="Cotisation sécurité sociale salarié (défaut: 9%)" value={val("cnas_employee_rate")} onChange={v => handleChange("cnas_employee_rate", v)} type="number" />
+            <SettingInput label="Taux CNAS employeur (%)" hint="Cotisation sécurité sociale employeur (défaut: 26%)" value={val("cnas_employer_rate")} onChange={v => handleChange("cnas_employer_rate", v)} type="number" />
+            <SettingInput label="Taux abattement IRG" hint="Abattement IRG (défaut: 0.40 = 40%)" value={val("irg_abattement_rate")} onChange={v => handleChange("irg_abattement_rate", v)} type="number" />
+            <SettingInput label="Abattement IRG min (DA)" hint="Plancher abattement (défaut: 1000)" value={val("irg_abattement_min")} onChange={v => handleChange("irg_abattement_min", v)} type="number" />
+            <SettingInput label="Abattement IRG max (DA)" hint="Plafond abattement (défaut: 1500)" value={val("irg_abattement_max")} onChange={v => handleChange("irg_abattement_max", v)} type="number" />
+            <SettingInput label="Seuil exonération IRG (DA)" hint="Exonération totale sous ce seuil (défaut: 30000)" value={val("irg_exoneration_threshold")} onChange={v => handleChange("irg_exoneration_threshold", v)} type="number" />
+            <SettingInput label="SNMG (DA)" hint="Salaire national minimum garanti (défaut: 24000)" value={val("snmg")} onChange={v => handleChange("snmg", v)} type="number" />
+            <SettingInput label="Heures mensuelles" hint="Heures légales par mois (défaut: 173.33)" value={val("monthly_hours")} onChange={v => handleChange("monthly_hours", v)} type="number" />
+            <SettingInput label="Jours mensuels" hint="Jours par mois (défaut: 30)" value={val("monthly_days")} onChange={v => handleChange("monthly_days", v)} type="number" />
+            <SettingInput label="Réduction familiale (DA/pers)" hint="Réduction IRG par personne à charge (défaut: 1500)" value={val("family_reduction")} onChange={v => handleChange("family_reduction", v)} type="number" />
+          </div>
+        </div>
+
+        {/* Section 3: Rubriques cotisables (flags) */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <h3 className="mb-3 text-sm font-bold text-gray-700 border-b pb-2">Rubriques Cotisables ({cotisables.length})</h3>
+          <p className="mb-3 text-xs text-gray-400">Rubriques avec flag <code className="bg-gray-100 px-1 rounded">is_secu_s</code> = participent à la base CNAS</p>
+          <div className="max-h-60 overflow-y-auto space-y-1">
+            {cotisables.map(r => (
+              <div key={r.code} className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-gray-50">
+                <span className="font-mono text-gray-400 w-10">R{r.code}</span>
+                <span className="flex-1 text-gray-700">{r.libelle || "(sans libellé)"}</span>
+                <span className="text-[10px] text-gray-400">cl{r.classe}</span>
+              </div>
+            ))}
+            {cotisables.length === 0 && <p className="text-center text-xs text-gray-400 py-4">Aucune rubrique cotisable</p>}
+          </div>
+        </div>
+
+        {/* Section 4: Rubriques imposables */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <h3 className="mb-3 text-sm font-bold text-gray-700 border-b pb-2">Rubriques Imposables ({imposables.length})</h3>
+          <p className="mb-3 text-xs text-gray-400">Rubriques avec flag <code className="bg-gray-100 px-1 rounded">is_impos</code> = participent à la base IRG</p>
+          <div className="max-h-60 overflow-y-auto space-y-1">
+            {imposables.map(r => (
+              <div key={r.code} className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-gray-50">
+                <span className="font-mono text-gray-400 w-10">R{r.code}</span>
+                <span className="flex-1 text-gray-700">{r.libelle || "(sans libellé)"}</span>
+                <span className="text-[10px] text-gray-400">cl{r.classe}</span>
+              </div>
+            ))}
+            {imposables.length === 0 && <p className="text-center text-xs text-gray-400 py-4">Aucune rubrique imposable</p>}
+          </div>
+        </div>
+
+        {/* Section 5: Ordre des rubriques */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4 lg:col-span-2">
+          <h3 className="mb-3 text-sm font-bold text-gray-700 border-b pb-2">Ordre de Calcul des Rubriques ({totals.length} rubriques de totalisation)</h3>
+          <p className="mb-3 text-xs text-gray-400">L'ordre de calcul est défini par le champ <code className="bg-gray-100 px-1 rounded">ord_clc</code> de chaque rubrique. Les rubriques ci-dessous ont le flag <code className="bg-gray-100 px-1 rounded">is_total</code> et participent aux accumulations T[].</p>
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3 max-h-60 overflow-y-auto">
+            {[...totals].sort((a, b) => (a.classe ?? 0) - (b.classe ?? 0) || a.code.localeCompare(b.code)).map(r => (
+              <div key={r.code} className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-gray-50">
+                <span className="font-mono text-gray-400 w-10">R{r.code}</span>
+                <span className="flex-1 truncate text-gray-700">{r.libelle || "(sans libellé)"}</span>
+                <span className="text-[10px] text-gray-400">cl{r.classe}</span>
+                {r.is_brut === 1 && <span className="text-[10px] text-blue-600">brut</span>}
+                {r.is_secu_s === 1 && <span className="text-[10px] text-purple-600">cotis</span>}
+                {r.is_impos === 1 && <span className="text-[10px] text-orange-600">impos</span>}
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-gray-400">Pour modifier l'ordre de calcul, éditez le champ <code className="bg-gray-100 px-1 rounded">ord_clc</code> d'une rubrique dans l'onglet "Rubriques".</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingInput({ label, hint, value, onChange, type = "text" }: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-700">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        step={type === "number" ? "0.01" : undefined}
+        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+      />
+      {hint && <p className="mt-0.5 text-[10px] text-gray-400">{hint}</p>}
+    </div>
+  );
+}
+
+function SettingRubSelect({ label, hint, value, onChange, rubriques }: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+  rubriques: RubriqueRef[];
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-700">{label}</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+      >
+        <option value="">— Aucune —</option>
+        {rubriques.slice(0, 500).map(r => (
+          <option key={r.code} value={r.code}>
+            R{r.code} — {r.libelle || "(sans libellé)"} (cl{r.classe})
+          </option>
+        ))}
+      </select>
+      {hint && <p className="mt-0.5 text-[10px] text-gray-400">{hint}</p>}
     </div>
   );
 }

@@ -463,6 +463,13 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             value REAL
         );
 
+        -- Salary calculation settings (global parameterization)
+        CREATE TABLE IF NOT EXISTS salary_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
         -- Lookup values (from VALEURS table)
         CREATE TABLE IF NOT EXISTS lookup_values (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

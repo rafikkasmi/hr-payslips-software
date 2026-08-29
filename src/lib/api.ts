@@ -608,6 +608,16 @@ export const api = {
       tableName: tableName ?? null,
     }),
 
+  // Salary settings (global parameterization)
+  getSalarySettings: () =>
+    invoke<Record<string, string>>("get_salary_settings"),
+
+  setSalarySetting: (key: string, value: string) =>
+    invoke<void>("set_salary_setting", { key, value }),
+
+  setSalarySettings: (settings: Record<string, string>) =>
+    invoke<void>("set_salary_settings", { settings }),
+
   // File dialog helpers
   pickFile: (filters?: { name: string; extensions: string[] }[]) =>
     open({ multiple: false, filters }),
