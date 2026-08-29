@@ -152,8 +152,8 @@ export function SimulatorPage() {
             calcul: meta?.calcul ?? 0,
           };
         })
-        // Filter: only rubriques with calcul=0 (manuelles/saisissables), not calculated ones
-        .filter(r => r.calcul === 0);
+        // Filter: only rubriques with calcul=0 (manuelles/saisissables) AND with a libellé
+        .filter(r => r.calcul === 0 && r.libelle && r.libelle.trim() !== "" && r.libelle !== "(sans libellé)");
       setSimRubriques(inputs);
     } catch (e) {
       console.error("Failed to load profile rubriques:", e);

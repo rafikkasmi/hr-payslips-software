@@ -1678,7 +1678,9 @@ async fn get_rubriques(state: State<'_, AppState>) -> Result<Vec<serde_json::Val
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
                is_total, is_imp, manuelle, init_val, ord_clc, calcul
-               FROM rubriques ORDER BY CAST(code AS INTEGER)"#,
+               FROM rubriques
+               WHERE libelle IS NOT NULL AND TRIM(libelle) != ''
+               ORDER BY CAST(code AS INTEGER)"#,
         )
         .map_err(|e| e.to_string())?;
 
