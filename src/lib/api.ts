@@ -137,6 +137,7 @@ export interface CalcLine {
   is_input: boolean;
   base_value?: number | null;
   taux_value?: number | null;
+  formule?: string | null;
 }
 
 export interface AppliedBonus {
@@ -165,6 +166,7 @@ export interface CalcResult {
   base_imposable: number;
   irg: number;
   applied_bonuses?: AppliedBonus[];
+  t_values?: Record<string, number>;
 }
 
 export interface Leave {

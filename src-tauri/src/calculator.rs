@@ -34,6 +34,8 @@ pub struct CalcLine {
     pub base_value: Option<f64>,
     #[serde(default)]
     pub taux_value: Option<f64>,
+    #[serde(default)]
+    pub formule: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +67,8 @@ pub struct CalcResult {
     pub irg: f64,
     #[serde(default)]
     pub applied_bonuses: Vec<AppliedBonus>,
+    #[serde(default)]
+    pub t_values: std::collections::HashMap<String, f64>,
 }
 
 pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
@@ -1117,6 +1121,7 @@ pub fn calculate_salary(
                 is_input: false,
                 base_value: Some(n050),
                 taux_value: Some(r010),
+                formule: Some("N[050]*R[010]".to_string()),
             });
             // Add R050 to T[04] (total retenues)
             *t_values.entry(4).or_insert(0.0) += r050;
@@ -1155,6 +1160,7 @@ pub fn calculate_salary(
                 is_input: true,
                 base_value,
                 taux_value,
+                formule: None,
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             continue;
@@ -1172,6 +1178,7 @@ pub fn calculate_salary(
                 is_input: true,
                 base_value,
                 taux_value,
+                formule: None,
             });
             accumulate_t(&mut t_values, rub, m_val, &mut cotisable_gains);
             continue;
@@ -1327,6 +1334,7 @@ pub fn calculate_salary(
                 is_input: false,
                 base_value,
                 taux_value,
+                formule: rub.formule.clone(),
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             // After R655: restore R099 and reset T[15]=1.0
@@ -1372,6 +1380,7 @@ pub fn calculate_salary(
             is_input: false,
             base_value,
             taux_value,
+            formule: rub.formule.clone(),
         });
         accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
 
@@ -1428,6 +1437,11 @@ pub fn calculate_salary(
     let irg = r_values.get("660").copied().unwrap_or(0.0);
     let net_payer = total_gains - total_retenues;
 
+    // Export key T[] values for the simulator display
+    let t_export: std::collections::HashMap<String, f64> = t_values.iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+
     Ok(CalcResult {
         employee_id,
         matricule,
@@ -1442,6 +1456,7 @@ pub fn calculate_salary(
         base_imposable,
         irg,
         applied_bonuses,
+        t_values: t_export,
     })
 }
 

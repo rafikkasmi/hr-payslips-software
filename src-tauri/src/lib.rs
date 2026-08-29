@@ -982,6 +982,7 @@ fn get_saved_calculation(
                 base_imposable: r.get(10)?,
                 irg: r.get(11)?,
                 applied_bonuses: Vec::new(),
+                t_values: std::collections::HashMap::new(),
             })
         },
     );

@@ -13,6 +13,7 @@ interface RubInput {
   montant: number;
   nombre: number;
   classe: number;
+  formule: string | null;
 }
 
 interface RubriqueMeta {
@@ -44,6 +45,8 @@ export function SimulatorPage() {
   const [calculating, setCalculating] = useState(false);
   const [calcError, setCalcError] = useState<string | null>(null);
   const [showPayslip, setShowPayslip] = useState(false);
+  const [showTValues, setShowTValues] = useState(false);
+  const [showCalcChain, setShowCalcChain] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -135,21 +138,26 @@ export function SimulatorPage() {
   );
 
   // Auto-load rubriques from employee's profile (poste) when selected
+  // Only load SAISSISSABLE rubriques (manuelle=1 or no formula) — not calculated ones
   const loadProfileRubriques = useCallback(async (empId: number) => {
     try {
       const summary = await api.getPreCalcSummary(empId, period);
       const rubs = (Array.isArray(summary.rubriques) ? summary.rubriques : []) as Record<string, unknown>[];
-      const inputs: RubInput[] = rubs.map(r => {
-        const code = String(r.code ?? "").replace(/^R/, "").padStart(3, "0");
-        const meta = allRubriques.find(m => m.code === code);
-        return {
-          code,
-          libelle: String(r.libelle ?? meta?.libelle ?? "(sans libellé)"),
-          montant: Number(r.value ?? meta?.init_val ?? 0),
-          nombre: 0,
-          classe: meta?.classe ?? 0,
-        };
-      });
+      const inputs: RubInput[] = rubs
+        .map(r => {
+          const code = String(r.code ?? "").replace(/^R/, "").padStart(3, "0");
+          const meta = allRubriques.find(m => m.code === code);
+          return {
+            code,
+            libelle: String(r.libelle ?? meta?.libelle ?? "(sans libellé)"),
+            montant: Number(r.value ?? meta?.init_val ?? 0),
+            nombre: 0,
+            classe: meta?.classe ?? 0,
+            formule: meta?.formule ?? null,
+          };
+        })
+        // Filter: only rubriques WITHOUT a formula (saisissables) or with classe 7 (paramètres)
+        .filter(r => !r.formule || r.classe === 7);
       setSimRubriques(inputs);
     } catch (e) {
       console.error("Failed to load profile rubriques:", e);
@@ -186,6 +194,7 @@ export function SimulatorPage() {
       montant: rub.init_val,
       nombre: 0,
       classe: rub.classe,
+      formule: rub.formule,
     }]);
   };
 
@@ -202,6 +211,21 @@ export function SimulatorPage() {
   const clearSim = () => {
     setSimRubriques([]);
     setCalcResult(null);
+  };
+
+  // Scénarios pré-configurés
+  const applyScenario = (scenario: "full" | "absence3" | "conge10" | "maladie5" | "hs20") => {
+    setSimRubriques(prev => prev.map(r => {
+      if (["033", "089", "099", "110", "120", "127"].includes(r.code)) {
+        let val = 0;
+        if (scenario === "absence3" && r.code === "033") val = 3;
+        if (scenario === "conge10" && r.code === "099") val = 10;
+        if (scenario === "maladie5" && r.code === "089") val = 5;
+        if (scenario === "hs20" && r.code === "110") val = 20;
+        return { ...r, nombre: val };
+      }
+      return r;
+    }));
   };
 
   const recalculate = useCallback(async (empId: number, per: string, inputs: RubInput[]) => {
@@ -515,6 +539,13 @@ export function SimulatorPage() {
                 </div>
               </div>
 
+              {/* Légende */}
+              <div className="mb-2 flex items-center gap-3 text-[10px] text-gray-400">
+                <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded bg-blue-200" /> Saisi manuellement</span>
+                <span className="flex items-center gap-1"><span className="text-blue-500">✎</span> = modifiable</span>
+                <span>Survolez une ligne pour voir la formule</span>
+              </div>
+
               {/* Gains / Retenues — adaptatif : side-by-side si large, stacked si étroit */}
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <div>
@@ -531,9 +562,12 @@ export function SimulatorPage() {
                     </thead>
                     <tbody>
                       {gains.map(l => (
-                        <tr key={l.code} className="border-b border-gray-50">
+                        <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
                           <td className="py-0.5 font-mono text-gray-400">{l.code}</td>
-                          <td className="py-0.5 text-gray-700">{l.libelle}</td>
+                          <td className="py-0.5 text-gray-700">
+                            {l.libelle}
+                            {l.is_input && <span className="ml-1 text-[9px] text-blue-500">✎</span>}
+                          </td>
                           <td className="py-0.5 text-right text-gray-400">{l.base_value != null && l.base_value !== 0 ? formatCurrency(l.base_value) : "—"}</td>
                           <td className="py-0.5 text-right text-gray-400">{l.taux_value != null && l.taux_value !== 0 ? l.taux_value : "—"}</td>
                           <td className="py-0.5 text-right font-medium text-gray-900">{formatCurrency(l.amount)}</td>
@@ -558,9 +592,12 @@ export function SimulatorPage() {
                     </thead>
                     <tbody>
                       {retenues.map(l => (
-                        <tr key={l.code} className="border-b border-gray-50">
+                        <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
                           <td className="py-0.5 font-mono text-gray-400">{l.code}</td>
-                          <td className="py-0.5 text-gray-700">{l.libelle}</td>
+                          <td className="py-0.5 text-gray-700">
+                            {l.libelle}
+                            {l.is_input && <span className="ml-1 text-[9px] text-blue-500">✎</span>}
+                          </td>
                           <td className="py-0.5 text-right text-gray-400">{l.base_value != null && l.base_value !== 0 ? formatCurrency(l.base_value) : "—"}</td>
                           <td className="py-0.5 text-right text-gray-400">{l.taux_value != null && l.taux_value !== 0 ? l.taux_value : "—"}</td>
                           <td className="py-0.5 text-right font-medium text-red-600">{formatCurrency(Math.abs(l.amount))}</td>
@@ -585,6 +622,58 @@ export function SimulatorPage() {
                   </div>
                 </div>
               )}
+
+              {/* Scenarios */}
+              {simRubriques.length > 0 && (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-gray-400 mr-1">Scénarios:</span>
+                  {[
+                    { key: "full", label: "Mois complet" },
+                    { key: "absence3", label: "Absence 3j" },
+                    { key: "conge10", label: "Congé 10j" },
+                    { key: "maladie5", label: "Maladie 5j" },
+                    { key: "hs20", label: "HS 20h" },
+                  ].map(s => (
+                    <button
+                      key={s.key}
+                      onClick={() => applyScenario(s.key as "full" | "absence3" | "conge10" | "maladie5" | "hs20")}
+                      className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600 hover:bg-blue-100 hover:text-blue-700"
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* T[] variables collapsible */}
+              {calcResult.t_values && Object.keys(calcResult.t_values).length > 0 && (
+                <div className="mb-3">
+                  <button
+                    onClick={() => setShowTValues(!showTValues)}
+                    className="flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                  >
+                    {showTValues ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    Variables système T[] ({Object.keys(calcResult.t_values).length})
+                  </button>
+                  {showTValues && (
+                    <TValuesDisplay tValues={calcResult.t_values} />
+                  )}
+                </div>
+              )}
+
+              {/* Calc chain collapsible */}
+              <div className="mb-3">
+                <button
+                  onClick={() => setShowCalcChain(!showCalcChain)}
+                  className="flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                >
+                  {showCalcChain ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                  Chaîne de calcul (formules résolues)
+                </button>
+                {showCalcChain && (
+                  <CalcChainDisplay lines={calcResult.lines} />
+                )}
+              </div>
 
               {/* All lines collapsible */}
               <AllLinesCollapse lines={calcResult.lines} />
@@ -633,6 +722,113 @@ function AllLinesCollapse({ lines }: { lines: CalcLine[] }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// TValuesDisplay — Affiche les variables système T[]
+// ============================================================
+
+const tLabels: Record<string, string> = {
+  "1": "Cotisable (mensuel)",
+  "3": "Total gains",
+  "4": "Total retenues",
+  "7": "Salaire base (R001)",
+  "9": "Jours/mois",
+  "10": "Heures/mois",
+  "15": "Ratio travail normal",
+  "16": "Ratio heures supp",
+  "17": "Ratio nuit/weekend",
+  "40": "Flag exonération IRG",
+  "41": "Imposable régul",
+  "43": "Imposable mensuel",
+  "47": "Mutuelle multiplier",
+  "51": "Imposable 10%",
+  "52": "Salaire brut",
+  "53": "Cotisable 10%",
+  "57": "Cotisable régul",
+  "58": "Cotisable pour IRG",
+  "76": "Prorata cotisable",
+  "77": "CACOBATH coefficient",
+  "78": "Heures/jour",
+};
+
+function TValuesDisplay({ tValues }: { tValues: Record<string, number> }) {
+  const sorted = Object.entries(tValues).sort((a, b) => Number(a[0]) - Number(b[0]));
+  return (
+    <div className="mt-1 rounded-lg border border-gray-200 bg-gray-50 p-3">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+        {sorted.map(([key, val]) => (
+          <div key={key} className="flex items-center justify-between gap-2">
+            <span className="text-gray-500">
+              <span className="font-mono text-gray-400">T[{key}]</span>
+              {" "}
+              <span className="text-[10px]">{tLabels[key] || ""}</span>
+            </span>
+            <span className={`font-semibold ${key === "52" || key === "1" || key === "43" ? "text-gray-900" : "text-gray-600"}`}>
+              {Number.isInteger(val) ? val : val.toFixed(4)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// CalcChainDisplay — Affiche la chaîne de calcul avec formules résolues
+// ============================================================
+
+function CalcChainDisplay({ lines }: { lines: CalcLine[] }) {
+  const sorted = [...lines]
+    .filter(l => l.amount !== 0 || l.is_input)
+    .sort((a, b) => Number(a.code) - Number(b.code));
+
+  return (
+    <div className="mt-1 max-h-80 overflow-y-auto rounded-lg border border-gray-200">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 bg-gray-50 text-gray-400">
+          <tr>
+            <th className="px-2 py-1 text-left font-normal w-10">Code</th>
+            <th className="px-2 py-1 text-left font-normal">Libellé</th>
+            <th className="px-2 py-1 text-left font-normal w-32">Type</th>
+            <th className="px-2 py-1 text-left font-normal">Formule</th>
+            <th className="px-2 py-1 text-right font-normal w-24">Montant</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map(l => {
+            const typeLabel = l.is_input
+              ? "SAISI"
+              : l.formule
+                ? "CALCULÉ"
+                : "MANUEL";
+            const typeColor = l.is_input
+              ? "text-blue-600 bg-blue-50"
+              : l.formule
+                ? "text-gray-500 bg-gray-100"
+                : "text-purple-600 bg-purple-50";
+            return (
+              <tr key={l.code} className="border-b border-gray-50 hover:bg-blue-50/30">
+                <td className="px-2 py-0.5 font-mono text-gray-400">R{l.code}</td>
+                <td className="px-2 py-0.5 text-gray-700 truncate max-w-[120px]">{l.libelle}</td>
+                <td className="px-2 py-0.5">
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${typeColor}`}>
+                    {typeLabel}
+                  </span>
+                </td>
+                <td className="px-2 py-0.5 font-mono text-[10px] text-gray-400 truncate max-w-[200px]">
+                  {l.formule || "—"}
+                </td>
+                <td className="px-2 py-0.5 text-right font-medium text-gray-900">
+                  {formatCurrency(l.amount)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
