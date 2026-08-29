@@ -15,6 +15,7 @@ interface RubInput {
   nombre: number;
   classe: number;
   formule: string | null;
+  calcul: number;
 }
 
 interface RubriqueMeta {
@@ -23,6 +24,7 @@ interface RubriqueMeta {
   classe: number;
   init_val: number;
   formule: string | null;
+  calcul: number; // 0 = manuelle/saisissable, 1 = calculée
 }
 
 export function SimulatorPage() {
@@ -116,6 +118,7 @@ export function SimulatorPage() {
           classe: Number(r.classe ?? 0),
           init_val: Number(r.init_val ?? 0),
           formule: (r.formule as string | null) ?? null,
+          calcul: Number(r.calcul ?? 0),
         }));
         setAllRubriques(mapped);
       } catch (e) {
@@ -146,10 +149,11 @@ export function SimulatorPage() {
             nombre: 0,
             classe: meta?.classe ?? 0,
             formule: meta?.formule ?? null,
+            calcul: meta?.calcul ?? 0,
           };
         })
-        // Filter: only rubriques WITHOUT a formula (saisissables) or with classe 7 (paramètres)
-        .filter(r => !r.formule || r.classe === 7);
+        // Filter: only rubriques with calcul=0 (manuelles/saisissables), not calculated ones
+        .filter(r => r.calcul === 0);
       setSimRubriques(inputs);
     } catch (e) {
       console.error("Failed to load profile rubriques:", e);
@@ -187,6 +191,7 @@ export function SimulatorPage() {
       nombre: 0,
       classe: rub.classe,
       formule: rub.formule,
+      calcul: rub.calcul,
     }]);
   };
 

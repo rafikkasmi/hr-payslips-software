@@ -1677,7 +1677,7 @@ async fn get_rubriques(state: State<'_, AppState>) -> Result<Vec<serde_json::Val
     let mut stmt = conn
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
-               is_total, is_imp, manuelle, init_val, ord_clc
+               is_total, is_imp, manuelle, init_val, ord_clc, calcul
                FROM rubriques ORDER BY CAST(code AS INTEGER)"#,
         )
         .map_err(|e| e.to_string())?;
@@ -1697,6 +1697,7 @@ async fn get_rubriques(state: State<'_, AppState>) -> Result<Vec<serde_json::Val
                 "manuelle": row.get::<_, Option<i64>>(9)?,
                 "init_val": row.get::<_, Option<f64>>(10)?,
                 "ord_clc": row.get::<_, Option<f64>>(11)?,
+                "calcul": row.get::<_, Option<i64>>(12)?,
             }))
         })
         .map_err(|e| e.to_string())?;
