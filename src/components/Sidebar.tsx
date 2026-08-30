@@ -9,15 +9,15 @@ interface SidebarProps {
 }
 
 const navItems: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
-  { page: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { page: "employees", label: "Employees", icon: Users },
+  { page: "dashboard", label: "Tableau de bord", icon: LayoutDashboard },
+  { page: "employees", label: "Employés", icon: Users },
   { page: "postes", label: "Postes", icon: Briefcase },
-  { page: "shifts", label: "Shifts", icon: Clock },
+  { page: "shifts", label: "Horaires", icon: Clock },
   { page: "pointeuse", label: "Pointeuse", icon: Fingerprint },
-  { page: "attendance", label: "Attendance", icon: CalendarOff },
-  { page: "leaves", label: "Leaves", icon: CalendarOff },
-  { page: "bonuses", label: "Bonuses", icon: Gift },
-  { page: "salary", label: "Salary", icon: Calculator },
+  { page: "attendance", label: "Présences", icon: CalendarOff },
+  { page: "leaves", label: "Congés", icon: CalendarOff },
+  { page: "bonuses", label: "Primes", icon: Gift },
+  { page: "salary", label: "Paie", icon: Calculator },
 ];
 
 export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
@@ -52,7 +52,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       <div className="border-t border-gray-200 p-3">
         <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100">
           <Settings className="h-5 w-5" />
-          Settings
+          Paramètres
         </button>
       </div>
     </aside>

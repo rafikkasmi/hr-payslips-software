@@ -29,6 +29,19 @@ pub struct CalcLine {
     pub classe: f64,
     pub amount: f64,
     pub is_input: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluated_formula: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugLogEntry {
+    pub step: String,
+    pub code: String,
+    pub action: String,
+    pub value: f64,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +73,8 @@ pub struct CalcResult {
     pub irg: f64,
     #[serde(default)]
     pub applied_bonuses: Vec<AppliedBonus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub debug_log: Vec<DebugLogEntry>,
 }
 
 pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
@@ -240,7 +255,8 @@ pub fn bareme_irg(base: f64, prorata: f64) -> f64 {
 }
 
 /// Evaluate a PCPAIE formula expression
-/// Supports: R[NNN], T[NN], M, N, IRG(base, prorata), arithmetic + - * / ( )
+/// Supports: R[NNN], T[NN], M, N, IRG(base, prorata), TOTAL(...), arithmetic + - * / ( )
+#[allow(dead_code)]
 fn eval_formula(
     formula: &str,
     r_values: &HashMap<String, f64>,
@@ -249,12 +265,24 @@ fn eval_formula(
     n_val: f64,
     period: &str,
 ) -> Result<f64, String> {
+    eval_formula_with_rubriques(formula, r_values, t_values, m_val, n_val, period, &[])
+}
+
+fn eval_formula_with_rubriques(
+    formula: &str,
+    r_values: &HashMap<String, f64>,
+    t_values: &HashMap<usize, f64>,
+    m_val: f64,
+    n_val: f64,
+    period: &str,
+    rubriques: &[RubriqueDef],
+) -> Result<f64, String> {
     let expr = formula.trim();
     if expr.is_empty() {
         return Ok(0.0);
     }
     // Parse and evaluate using a simple recursive descent parser
-    let mut parser = ExprParser::new(expr, r_values, t_values, m_val, n_val, period);
+    let mut parser = ExprParser::new(expr, r_values, t_values, m_val, n_val, period, rubriques);
     parser.parse_expr()
 }
 
@@ -266,6 +294,7 @@ struct ExprParser<'a> {
     m_val: f64,
     n_val: f64,
     period: &'a str,
+    rubriques: &'a [RubriqueDef],
 }
 
 impl<'a> ExprParser<'a> {
@@ -276,6 +305,7 @@ impl<'a> ExprParser<'a> {
         m_val: f64,
         n_val: f64,
         period: &'a str,
+        rubriques: &'a [RubriqueDef],
     ) -> Self {
         ExprParser {
             chars: expr.chars().collect(),
@@ -285,6 +315,7 @@ impl<'a> ExprParser<'a> {
             m_val,
             n_val,
             period,
+            rubriques,
         }
     }
 
@@ -466,7 +497,47 @@ impl<'a> ExprParser<'a> {
                     let idx: usize = idx_str.parse().unwrap_or(0);
                     Ok(*self.t_values.get(&idx).unwrap_or(&0.0))
                 } else {
-                    Err(format!("Expected '[' after T at pos {}", self.pos))
+                    // Not T[...] — could be TOTAL(...) function
+                    let rest = self.read_identifier();
+                    let name = format!("T{}", rest);
+                    if name.eq_ignore_ascii_case("TOTAL") {
+                        self.skip_ws();
+                        if self.peek() == Some('(') {
+                            self.advance();
+                            // Parse 5 args: classe, is_brut, is_secu_s, is_impos, is_regular
+                            let classe = self.parse_expr()?;
+                            self.skip_ws();
+                            if self.peek() == Some(',') { self.advance(); }
+                            let is_brut = self.parse_expr()?;
+                            self.skip_ws();
+                            if self.peek() == Some(',') { self.advance(); }
+                            let is_secu_s = self.parse_expr()?;
+                            self.skip_ws();
+                            if self.peek() == Some(',') { self.advance(); }
+                            let is_impos = self.parse_expr()?;
+                            self.skip_ws();
+                            if self.peek() == Some(',') { self.advance(); }
+                            let is_regular = self.parse_expr()?;
+                            self.skip_ws();
+                            if self.peek() == Some(')') { self.advance(); }
+                            // Sum all R values matching the criteria
+                            let mut total = 0.0;
+                            for rub in self.rubriques {
+                                if classe != 0.0 && rub.classe != classe { continue; }
+                                if is_brut != 0.0 && rub.is_brut != (is_brut != 0.0) { continue; }
+                                if is_secu_s != 0.0 && rub.is_secu_s != (is_secu_s != 0.0) { continue; }
+                                if is_impos != 0.0 && rub.is_impos != (is_impos != 0.0) { continue; }
+                                if is_regular != 0.0 && rub.is_regular != (is_regular != 0.0) { continue; }
+                                let val = self.r_values.get(&rub.code).copied().unwrap_or(0.0);
+                                total += val;
+                            }
+                            Ok(total)
+                        } else {
+                            Err("Expected '(' after TOTAL".into())
+                        }
+                    } else {
+                        Err(format!("Expected '[' after T or TOTAL(...) at pos {}", self.pos))
+                    }
                 }
             }
             Some('I') | Some('i') => {
@@ -581,6 +652,7 @@ pub fn calculate_salary(
     // input_values: rubrique_code -> (M montant, N nombre)
 ) -> Result<CalcResult, String> {
     let rubriques = load_rubriques(conn)?;
+    let mut debug_log: Vec<DebugLogEntry> = Vec::new();
 
     // Get employee info
     let (matricule, nom, prenom): (String, String, String) = conn
@@ -663,6 +735,28 @@ pub fn calculate_salary(
         }
     }
 
+    // Pre-compute leave/absence days for is_absence_dependent bonus prorata
+    let calendar_working_days = compute_working_days(period);
+    let r033_input = effective_inputs.get("033").map(|(m, _)| *m).unwrap_or(0.0);
+    let r089_input = effective_inputs.get("089").map(|(m, _)| *m).unwrap_or(0.0);
+    let r099_input = effective_inputs.get("099").map(|(m, _)| *m).unwrap_or(0.0);
+    let (conge_days, sick_days) = compute_leave_days(conn, employee_id, period);
+    let r099_pre = if r099_input != 0.0 { r099_input } else { conge_days };
+    let r089_pre = if r089_input != 0.0 { r089_input } else { sick_days };
+    let r033_pre = if r033_input != 0.0 {
+        r033_input
+    } else {
+        compute_absent_days(conn, employee_id, period, calendar_working_days, r099_pre + r089_pre)
+    };
+    // Worked days = standard working days - absences - sick days (congé is paid, counts as worked)
+    let worked_days = (calendar_working_days - r033_pre - r089_pre).max(0.0);
+
+    debug_log.push(DebugLogEntry {
+        step: "pre-compute".to_string(), code: "LEAVES".to_string(), action: "compute".to_string(),
+        value: worked_days, description: format!("Jours ouvrables={}, congé={}, maladie={}, absence={}, travaillés={}",
+            calendar_working_days, r099_pre, r089_pre, r033_pre, worked_days),
+    });
+
     // Load active bonuses for this employee/period and inject as input values
     // Bonuses with a rubrique_code get injected as that rubrique's M value
     let mut applied_bonuses: Vec<AppliedBonus> = Vec::new();
@@ -670,7 +764,8 @@ pub fn calculate_salary(
         let mut bonus_stmt = conn.prepare(
             r#"SELECT b.id, b.title, b.amount, b.is_percentage, b.rubrique_code, b.bonus_type,
                b.is_imposable, b.is_cotisable, b.is_absence_dependent, b.absence_divisor,
-               b.amount_type, b.income_grid_min, b.income_grid_max
+               b.amount_type, b.income_grid_min, b.income_grid_max, b.contract_types,
+               e.contrat, e.no_grille
                FROM bonuses b
                LEFT JOIN bonus_assignments ba ON ba.bonus_id = b.id AND ba.employee_id = ?
                LEFT JOIN employees e ON e.id = ?
@@ -710,21 +805,96 @@ pub fn calculate_salary(
                 row.get::<_, String>(5)?,    // bonus_type
                 row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0, // is_imposable
                 row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0, // is_cotisable
+                row.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0, // is_absence_dependent
+                row.get::<_, Option<f64>>(9)?.unwrap_or(22.0),   // absence_divisor
+                row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "fixed".to_string()), // amount_type
+                row.get::<_, Option<f64>>(11)?, // income_grid_min
+                row.get::<_, Option<f64>>(12)?, // income_grid_max
+                row.get::<_, Option<String>>(13)?, // contract_types
+                row.get::<_, Option<String>>(14)?, // e.contrat
+                row.get::<_, Option<String>>(15)?, // e.no_grille
             ))
         }).map_err(|e| e.to_string())?;
         for bonus_row in bonus_rows {
-            if let Ok((bid, btitle, bamount, bpercent, brub_code, btype, b_imposable, b_cotisable)) = bonus_row {
+            if let Ok((bid, btitle, bamount, bpercent, brub_code, btype, b_imposable, b_cotisable,
+                       b_absence_dep, b_abs_div, b_amount_type, b_grid_min, b_grid_max,
+                       b_contract_types, e_contrat, e_no_grille)) = bonus_row {
+
+                // Phase 1d: contract_types filtering
+                if let Some(ref ct) = b_contract_types {
+                    let ct = ct.trim();
+                    if !ct.is_empty() {
+                        let allowed: Vec<&str> = ct.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                        let emp_contract = e_contrat.as_deref().unwrap_or("");
+                        if !allowed.iter().any(|&a| a.eq_ignore_ascii_case(emp_contract)) {
+                            continue;
+                        }
+                    }
+                }
+
                 if let Some(ref rub_code) = brub_code {
                     let numeric_code: String = rub_code.trim_start_matches('R').to_string();
+
+                    // Phase 1b: Determine base amount based on amount_type
+                    let base_amount = match b_amount_type.as_str() {
+                        "grid" => {
+                            // Look up salary_grid using employee's no_grille
+                            if let Some(ref grille) = e_no_grille {
+                                if let Ok(grid_val) = conn.query_row(
+                                    "SELECT montant FROM salary_grid WHERE no_grille=? ORDER BY indice DESC LIMIT 1",
+                                    [grille],
+                                    |r| r.get::<_, f64>(0),
+                                ) {
+                                    grid_val
+                                } else { bamount }
+                            } else { bamount }
+                        }
+                        "scaled" => {
+                            // Phase 1c: income_grid_min/max scaling
+                            let r001 = effective_inputs.get("001").map(|(m, _)| *m).unwrap_or(0.0);
+                            match (b_grid_min, b_grid_max) {
+                                (Some(min), Some(max)) => {
+                                    if max > min && r001 >= min && r001 <= max {
+                                        bamount * (r001 / max).min(1.0)
+                                    } else if r001 < min {
+                                        0.0
+                                    } else {
+                                        bamount
+                                    }
+                                }
+                                (Some(min), None) => {
+                                    if r001 < min { 0.0 } else { bamount }
+                                }
+                                (None, Some(max)) => {
+                                    if r001 > max { bamount } else { bamount * (r001 / max).min(1.0) }
+                                }
+                                _ => bamount,
+                            }
+                        }
+                        _ => bamount, // "fixed" (default)
+                    };
+
                     let computed = if bpercent {
                         let base = effective_inputs.get("001").map(|(m, _)| *m).unwrap_or(0.0);
-                        let bonus_amount = base * bamount / 100.0;
+                        let mut bonus_amount = base * base_amount / 100.0;
+
+                        // Phase 1a: is_absence_dependent prorata
+                        if b_absence_dep && b_abs_div > 0.0 {
+                            bonus_amount *= worked_days / b_abs_div;
+                        }
+
                         let existing = effective_inputs.get(&numeric_code).map(|(m, _)| *m).unwrap_or(0.0);
                         effective_inputs.insert(numeric_code.clone(), (existing + bonus_amount, 0.0));
                         bonus_amount
                     } else {
+                        let mut signed_amount = if btype == "deduction" { -base_amount } else { base_amount };
+
+                        // Phase 1a: is_absence_dependent prorata
+                        if b_absence_dep && b_abs_div > 0.0 {
+                            signed_amount *= worked_days / b_abs_div;
+                        }
+
                         let existing = effective_inputs.get(&numeric_code).map(|(m, _)| *m).unwrap_or(0.0);
-                        let signed_amount = if btype == "deduction" { -bamount } else { bamount };
                         effective_inputs.insert(numeric_code.clone(), (existing + signed_amount, 0.0));
                         signed_amount
                     };
@@ -755,8 +925,6 @@ pub fn calculate_salary(
     t_values.insert(2, 0.0); // imposable
     t_values.insert(3, 0.0); // brut total (gains)
     t_values.insert(4, 0.0); // retenues total
-    // Calendar working days (Sun-Thu) — used only for attendance-based absence count
-    let calendar_working_days = compute_working_days(period);
     // T[09] = standard working days for prorata. PCPAIE defaults to 30 (Algerian
     // standard month). Can be overridden via global_params key "9".
     t_values.insert(9, 30.0); // T[09] = standard working days (PCPAIE default: 30)
@@ -942,20 +1110,10 @@ pub fn calculate_salary(
     //   R089 maladie -> R090 retenue (deducted, does not affect R200 prorata)
     //   R033 absence -> R034 retenue (deducted, reduces R200 prorata)
     // An explicit input value always wins over the derived one.
-    let r033_input = input_values.get("033").map(|(m, _)| *m).unwrap_or(0.0);
-    let r089_input = input_values.get("089").map(|(m, _)| *m).unwrap_or(0.0);
-    let r099_input = input_values.get("099").map(|(m, _)| *m).unwrap_or(0.0);
-
-    let (conge_days, sick_days) = compute_leave_days(conn, employee_id, period);
-    let r099 = if r099_input != 0.0 { r099_input } else { conge_days };
-    let r089 = if r089_input != 0.0 { r089_input } else { sick_days };
-    // Absences are the unexplained non-worked days: conge and maladie are already
-    // accounted for by their own rubriques and must not be deducted a second time.
-    let r033 = if r033_input != 0.0 {
-        r033_input
-    } else {
-        compute_absent_days(conn, employee_id, period, calendar_working_days, r099 + r089)
-    };
+    // Values were pre-computed above for bonus prorata — reuse them.
+    let r099 = r099_pre;
+    let r089 = r089_pre;
+    let r033 = r033_pre;
     r_values.insert("033".to_string(), r033);
     r_values.insert("089".to_string(), r089);
     r_values.insert("099".to_string(), r099);
@@ -986,6 +1144,8 @@ pub fn calculate_salary(
                 classe: 0.0,
                 amount: r050,
                 is_input: false,
+                formula: Some("N050 * R010".to_string()),
+                evaluated_formula: Some(format!("{} * {:.2}", n050, r010)),
             });
             // Add R050 to T[04] (total retenues)
             *t_values.entry(4).or_insert(0.0) += r050;
@@ -1021,6 +1181,8 @@ pub fn calculate_salary(
                 classe: rub.classe,
                 amount,
                 is_input: true,
+                formula: None,
+                evaluated_formula: None,
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             continue;
@@ -1035,6 +1197,8 @@ pub fn calculate_salary(
                 classe: rub.classe,
                 amount: m_val,
                 is_input: true,
+                formula: None,
+                evaluated_formula: None,
             });
             accumulate_t(&mut t_values, rub, m_val, &mut cotisable_gains);
             continue;
@@ -1148,7 +1312,7 @@ pub fn calculate_salary(
             // Recompute R010 with updated T[09]
             if let Some(r010_rub) = rubriques.iter().find(|r| r.code == "010") {
                 if let Some(ref r010_formula) = r010_rub.formule {
-                    if let Ok(r010_new) = eval_formula(r010_formula, &r_values, &t_values, 0.0, 0.0, period) {
+                    if let Ok(r010_new) = eval_formula_with_rubriques(r010_formula, &r_values, &t_values, 0.0, 0.0, period, &rubriques) {
                         r_values.insert("010".to_string(), r010_new);
                     }
                 }
@@ -1158,7 +1322,7 @@ pub fn calculate_salary(
                 Some(f) => f,
                 None => continue,
             };
-            let mut amount = match eval_formula(formula, &r_values, &t_values, m_val, n_val, period) {
+            let mut amount = match eval_formula_with_rubriques(formula, &r_values, &t_values, m_val, n_val, period, &rubriques) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("Formula error for {}: {} - {}", code, formula, e);
@@ -1187,6 +1351,8 @@ pub fn calculate_salary(
                 classe: rub.classe,
                 amount,
                 is_input: false,
+                formula: rub.formule.clone(),
+                evaluated_formula: Some(format_formula(formula, &r_values, &t_values)),
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             // After R655: restore R099 and reset T[15]=1.0
@@ -1202,7 +1368,7 @@ pub fn calculate_salary(
             Some(f) => f,
             None => continue,
         };
-        let mut amount = match eval_formula(formula, &r_values, &t_values, m_val, n_val, period) {
+        let mut amount = match eval_formula_with_rubriques(formula, &r_values, &t_values, m_val, n_val, period, &rubriques) {
             Ok(v) => v,
             Err(e) => {
                 // Log error but continue with 0
@@ -1229,6 +1395,12 @@ pub fn calculate_salary(
             classe: rub.classe,
             amount,
             is_input: false,
+            formula: rub.formule.clone(),
+            evaluated_formula: Some(format_formula(formula, &r_values, &t_values)),
+        });
+        debug_log.push(DebugLogEntry {
+            step: "formula".to_string(), code: code.clone(), action: "eval".to_string(),
+            value: amount, description: format!("{} = {}", rub.libelle, formula),
         });
         accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
 
@@ -1299,7 +1471,38 @@ pub fn calculate_salary(
         base_imposable,
         irg,
         applied_bonuses,
+        debug_log,
     })
+}
+
+/// Produce a human-readable version of a formula with variable values substituted.
+/// Uses regex to find R[NNN] and T[NN] patterns, normalizing the number to match
+/// the zero-padded keys in the HashMaps (R keys are 3-digit, T keys are usize).
+fn format_formula(
+    formula: &str,
+    r_values: &HashMap<String, f64>,
+    t_values: &HashMap<usize, f64>,
+) -> String {
+    let r_re = regex::Regex::new(r"[Rr]\[(\d+)\]").unwrap();
+    let t_re = regex::Regex::new(r"[Tt]\[(\d+)\]").unwrap();
+
+    let result = r_re.replace_all(formula, |caps: &regex::Captures| {
+        let raw = &caps[1];
+        let key = match raw.parse::<i64>() {
+            Ok(n) => format!("{:03}", n),
+            Err(_) => raw.to_string(),
+        };
+        let val = r_values.get(&key).copied().unwrap_or(0.0);
+        format!("{:.2}", val)
+    });
+
+    let result = t_re.replace_all(&result, |caps: &regex::Captures| {
+        let idx: usize = caps[1].parse().unwrap_or(0);
+        let val = t_values.get(&idx).copied().unwrap_or(0.0);
+        format!("{:.2}", val)
+    });
+
+    result.to_string()
 }
 
 fn accumulate_t(
@@ -1399,6 +1602,21 @@ fn compute_working_days(period: &str) -> f64 {
     working as f64
 }
 
+/// Public wrapper for compute_working_days
+pub fn compute_working_days_pub(period: &str) -> i64 {
+    compute_working_days(period) as i64
+}
+
+/// Public wrapper for compute_leave_days
+pub fn compute_leave_days_pub(conn: &Connection, employee_id: i64, period: &str) -> (f64, f64) {
+    compute_leave_days(conn, employee_id, period)
+}
+
+/// Public wrapper for compute_absent_days
+pub fn compute_absent_days_pub(conn: &Connection, employee_id: i64, period: &str, working_days: f64, accounted_days: f64) -> f64 {
+    compute_absent_days(conn, employee_id, period, working_days, accounted_days)
+}
+
 /// Parse a period string into (year, month).
 /// Accepts both PCPAIE style "MM-YYYY" (as stored in `paies.mois`) and
 /// HTML month-input style "YYYY-MM".
@@ -1482,8 +1700,7 @@ fn compute_leave_days(conn: &Connection, employee_id: i64, period: &str) -> (f64
                   - MAX(julianday(date(start_date)), julianday(date(?))) + 1 \
          FROM leaves \
          WHERE employee_id=? AND date(start_date) < date(?) AND date(end_date) >= date(?) \
-           AND LOWER(COALESCE(status,'')) \
-               NOT IN ('rejected','refuse','refused','cancelled','canceled')",
+           AND LOWER(COALESCE(status,'approved')) = 'approved'",
     ) {
         Ok(s) => s,
         Err(_) => return (0.0, 0.0),
@@ -1607,6 +1824,12 @@ pub fn save_calculation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize integration tests that share the live database.
+    /// Without this, tests that modify global_params (e.g. T[40]) interfere
+    /// with each other when Rust runs them in parallel.
+    static DB_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_parse_period_year_dash_format() {
@@ -1653,6 +1876,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         // Get employee ID for matricule 056
@@ -1693,6 +1917,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         // Try mat=003, 08-2023O (congé payslip)
@@ -1728,6 +1953,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         let emp_id: i64 = conn
@@ -1761,6 +1987,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         let emp_id: i64 = conn
@@ -1794,6 +2021,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         let emp_id: i64 = conn
@@ -1828,6 +2056,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         let emp_id: i64 = conn
@@ -1929,6 +2158,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         let emp_id: i64 = conn
@@ -1966,6 +2196,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         let emp_id: i64 = conn
@@ -2002,6 +2233,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         let emp_id: i64 = conn
@@ -2038,6 +2270,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         // Save original T[40] value and set to 1
@@ -2081,6 +2314,7 @@ mod tests {
             eprintln!("Skipping test: database not found at {}", db_path);
             return;
         }
+        let _lock = DB_TEST_MUTEX.lock().unwrap();
         let conn = Connection::open(db_path).unwrap();
 
         conn.execute("INSERT OR REPLACE INTO global_params (key, value) VALUES ('40', 1.0)", []).unwrap();
@@ -2109,5 +2343,144 @@ mod tests {
             "R655 should be ~0.3667 with T[40]=1 and congé R099=11, got {}",
             r655_val
         );
+    }
+
+    #[test]
+    fn test_format_formula_replaces_r_variables() {
+        let mut r = HashMap::new();
+        r.insert("001".to_string(), 50000.0);
+        r.insert("033".to_string(), 2.5);
+        let t = HashMap::new();
+
+        // Standard 3-digit format
+        let result = format_formula("R[001]*R[033]", &r, &t);
+        assert!(result.contains("50000.00"), "Should replace R[001] with value, got: {}", result);
+        assert!(result.contains("2.50"), "Should replace R[033] with value, got: {}", result);
+    }
+
+    #[test]
+    fn test_format_formula_handles_non_padded_r() {
+        let mut r = HashMap::new();
+        r.insert("001".to_string(), 50000.0);
+        let t = HashMap::new();
+
+        // Formula uses R[1] instead of R[001] — should still match
+        let result = format_formula("R[1]*2", &r, &t);
+        assert!(result.contains("50000.00"), "Should match R[1] to key '001', got: {}", result);
+    }
+
+    #[test]
+    fn test_format_formula_replaces_t_variables() {
+        let r = HashMap::new();
+        let mut t = HashMap::new();
+        t.insert(9, 30.0);
+        t.insert(10, 173.33);
+
+        let result = format_formula("T[09]/T[10]", &r, &t);
+        assert!(result.contains("30.00"), "Should replace T[09], got: {}", result);
+        assert!(result.contains("173.33"), "Should replace T[10], got: {}", result);
+    }
+
+    #[test]
+    fn test_format_formula_handles_non_padded_t() {
+        let r = HashMap::new();
+        let mut t = HashMap::new();
+        t.insert(9, 30.0);
+
+        // Formula uses T[9] instead of T[09]
+        let result = format_formula("T[9]", &r, &t);
+        assert!(result.contains("30.00"), "Should match T[9] to key 9, got: {}", result);
+    }
+
+    #[test]
+    fn test_format_formula_case_insensitive() {
+        let mut r = HashMap::new();
+        r.insert("001".to_string(), 50000.0);
+        let t = HashMap::new();
+
+        let result = format_formula("r[001]+R[001]", &r, &t);
+        // Both lowercase r[001] and uppercase R[001] should be replaced
+        assert!(!result.contains("R["), "All R variables should be replaced, got: {}", result);
+        assert!(!result.contains("r["), "All r variables should be replaced, got: {}", result);
+    }
+
+    #[test]
+    fn test_format_formula_missing_variable_defaults_zero() {
+        let r = HashMap::new();
+        let t = HashMap::new();
+
+        let result = format_formula("R[999]+T[99]", &r, &t);
+        assert!(result.contains("0.00"), "Missing variables should default to 0.00, got: {}", result);
+    }
+
+    #[test]
+    fn test_format_formula_preserves_arithmetic() {
+        let mut r = HashMap::new();
+        r.insert("001".to_string(), 50000.0);
+        let mut t = HashMap::new();
+        t.insert(9, 30.0);
+
+        let result = format_formula("R[001]*T[09]/30+100", &r, &t);
+        // Should preserve operators and constants
+        assert!(result.contains("*"), "Should preserve *, got: {}", result);
+        assert!(result.contains("/"), "Should preserve /, got: {}", result);
+        assert!(result.contains("+"), "Should preserve +, got: {}", result);
+        assert!(result.contains("100"), "Should preserve constant 100, got: {}", result);
+    }
+
+    #[test]
+    fn test_calc_line_has_formula_fields() {
+        let line = CalcLine {
+            code: "001".to_string(),
+            libelle: "Salaire de base".to_string(),
+            classe: 1.0,
+            amount: 50000.0,
+            is_input: false,
+            formula: Some("R[001]".to_string()),
+            evaluated_formula: Some("50000.00".to_string()),
+        };
+        assert_eq!(line.formula.as_deref(), Some("R[001]"));
+        assert_eq!(line.evaluated_formula.as_deref(), Some("50000.00"));
+    }
+
+    #[test]
+    fn test_debug_log_entry_construction() {
+        let entry = DebugLogEntry {
+            step: "pre-compute".to_string(),
+            code: "LEAVES".to_string(),
+            action: "compute".to_string(),
+            value: 22.0,
+            description: "Jours travaillés=22".to_string(),
+        };
+        assert_eq!(entry.step, "pre-compute");
+        assert_eq!(entry.code, "LEAVES");
+    }
+
+    #[test]
+    fn test_calc_result_has_debug_log() {
+        let result = CalcResult {
+            employee_id: 1,
+            matricule: "001".to_string(),
+            employee_name: "Test User".to_string(),
+            period: "01-2024".to_string(),
+            lines: vec![],
+            total_brut: 50000.0,
+            total_gains: 50000.0,
+            total_retenues: 10000.0,
+            net_payer: 40000.0,
+            base_cotisable: 50000.0,
+            base_imposable: 45000.0,
+            irg: 5000.0,
+            applied_bonuses: vec![],
+            debug_log: vec![DebugLogEntry {
+                step: "test".to_string(),
+                code: "001".to_string(),
+                action: "eval".to_string(),
+                value: 50000.0,
+                description: "test".to_string(),
+            }],
+        };
+        assert_eq!(result.debug_log.len(), 1);
+        assert_eq!(result.debug_log[0].code, "001");
     }
 }

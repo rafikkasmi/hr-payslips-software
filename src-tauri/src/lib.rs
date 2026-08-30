@@ -646,18 +646,24 @@ fn get_saved_calculation(
 ) -> Result<Option<CalcResult>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let row = conn.query_row(
-        r#"SELECT id, employee_id, matricule, period, results_json,
-                  total_brut, total_gains, total_retenues, net_payer,
-                  base_cotisable, base_imposable, irg
-           FROM salary_calculations WHERE employee_id=? AND period=? LIMIT 1"#,
+        r#"SELECT sc.id, sc.employee_id, sc.matricule, sc.period, sc.results_json,
+                  sc.total_brut, sc.total_gains, sc.total_retenues, sc.net_payer,
+                  sc.base_cotisable, sc.base_imposable, sc.irg,
+                  e.nom, e.prenom
+           FROM salary_calculations sc
+           LEFT JOIN employees e ON sc.employee_id = e.id
+           WHERE sc.employee_id=? AND sc.period=? LIMIT 1"#,
         rusqlite::params![employee_id, period],
         |r| {
             let results_json: String = r.get(4)?;
             let lines: Vec<calculator::CalcLine> = serde_json::from_str(&results_json).unwrap_or_default();
+            let nom: Option<String> = r.get(12)?;
+            let prenom: Option<String> = r.get(13)?;
+            let employee_name = format!("{} {}", nom.unwrap_or_default(), prenom.unwrap_or_default()).trim().to_string();
             Ok(CalcResult {
                 employee_id: r.get(1)?,
                 matricule: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                employee_name: String::new(),
+                employee_name,
                 period: r.get(3)?,
                 lines,
                 total_brut: r.get(5)?,
@@ -668,6 +674,7 @@ fn get_saved_calculation(
                 base_imposable: r.get(10)?,
                 irg: r.get(11)?,
                 applied_bonuses: Vec::new(),
+                debug_log: Vec::new(),
             })
         },
     );
@@ -811,6 +818,80 @@ fn delete_leave(state: State<AppState>, leave_id: i64) -> Result<(), String> {
     conn.execute("DELETE FROM leaves WHERE id=?", [leave_id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+fn approve_leave(state: State<AppState>, leave_id: i64) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE leaves SET status='approved' WHERE id=?", [leave_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn reject_leave(state: State<AppState>, leave_id: i64) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE leaves SET status='rejected' WHERE id=?", [leave_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_leave_balance(state: State<AppState>, employee_id: i64) -> Result<serde_json::Value, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+
+    // PERS1 fields: conge_du_j (droit annuel), conge_pr_j (pris), conge_ad_j (ajout)
+    let (du_j, pr_j, ad_j): (f64, f64, f64) = conn
+        .query_row(
+            "SELECT COALESCE(conge_du_j,0), COALESCE(conge_pr_j,0), COALESCE(conge_ad_j,0) FROM employees WHERE id=?",
+            [employee_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|e| e.to_string())?;
+
+    // Count approved annual leaves in current year from leaves table
+    let current_year = chrono::Local::now().format("%Y").to_string();
+    let year_start = format!("{}-01-01", current_year);
+    let year_end = format!("{}-12-31", current_year);
+
+    let used_from_leaves: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(days_count), 0) FROM leaves \
+             WHERE employee_id=? AND LOWER(leave_type) NOT IN ('sick','maladie','maternity','unpaid','sans solde') \
+               AND LOWER(COALESCE(status,'approved')) = 'approved' \
+               AND date(start_date) >= date(?) AND date(start_date) <= date(?)",
+            rusqlite::params![employee_id, year_start, year_end],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    // Pending leaves (not yet approved)
+    let pending_from_leaves: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(days_count), 0) FROM leaves \
+             WHERE employee_id=? AND LOWER(leave_type) NOT IN ('sick','maladie','maternity','unpaid','sans solde') \
+               AND LOWER(COALESCE(status,'pending')) = 'pending' \
+               AND date(start_date) >= date(?) AND date(start_date) <= date(?)",
+            rusqlite::params![employee_id, year_start, year_end],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    // Use the larger of PERS1 pr_j or leaves table used count
+    let used = pr_j.max(used_from_leaves);
+    let entitled = du_j + ad_j;
+    let remaining = (entitled - used).max(0.0);
+
+    Ok(serde_json::json!({
+        "entitled": entitled,
+        "used": used,
+        "remaining": remaining,
+        "pending": pending_from_leaves,
+        "pers1_du_j": du_j,
+        "pers1_pr_j": pr_j,
+        "pers1_ad_j": ad_j,
+        "year": current_year,
+    }))
 }
 
 // Bonuses
@@ -1704,8 +1785,24 @@ async fn get_all_salary_history(
     for row in rows2 {
         let r = row.map_err(|e| e.to_string())?;
         if let Some(ref p) = period {
-            if r.get("period").and_then(|v| v.as_str()) == Some(p.as_str()) {
+            let row_period = r.get("period").and_then(|v| v.as_str()).unwrap_or("");
+            if row_period == p.as_str() {
                 results.push(r);
+            } else {
+                // Try normalized format: app uses YYYY-MM, PCPAIE uses MM-YYYY
+                let normalized = if p.len() == 7 && p.contains('-') {
+                    let parts: Vec<&str> = p.split('-').collect();
+                    if parts[0].len() == 4 {
+                        format!("{}-{}", parts[1], parts[0])
+                    } else {
+                        p.clone()
+                    }
+                } else {
+                    p.clone()
+                };
+                if row_period == normalized {
+                    results.push(r);
+                }
             }
         } else {
             results.push(r);
@@ -1727,16 +1824,31 @@ fn get_historical_payslip(
 ) -> Result<serde_json::Value, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
 
-    let row = conn
-        .query_row(
-            r#"SELECT p.id, p.mois, p.matricule, p.montants, p.sit_fam, p.nbre_enf,
+    // Normalize period: app uses YYYY-MM, paies table uses MM-YYYY
+    let alt_period = if period.len() == 7 && period.contains('-') {
+        let parts: Vec<&str> = period.split('-').collect();
+        if parts[0].len() == 4 {
+            format!("{}-{}", parts[1], parts[0])
+        } else if parts[1].len() == 4 {
+            format!("{}-{}", parts[1], parts[0])
+        } else {
+            period.clone()
+        }
+    } else {
+        period.clone()
+    };
+
+    let query = r#"SELECT p.id, p.mois, p.matricule, p.montants, p.sit_fam, p.nbre_enf,
                       p.nbr_jr_ouv, p.nbr_hr_ouv, p.c_date, p.c_time,
                       e.nom, e.prenom
                FROM paies p
                LEFT JOIN employees e ON p.employee_id = e.id
-               WHERE p.employee_id=? AND p.mois=? AND p.mois != 'TOT-PAIE'
-               LIMIT 1"#,
-            rusqlite::params![employee_id, period],
+               WHERE p.employee_id=? AND p.mois IN (?1, ?2) AND p.mois != 'TOT-PAIE'
+               LIMIT 1"#;
+
+    let result = conn.query_row(
+        query,
+        rusqlite::params![employee_id, period, alt_period],
             |r| {
                 let montants: Option<String> = r.get(3)?;
                 let lines: Vec<serde_json::Value> = if let Some(ref m) = montants {
@@ -1788,7 +1900,7 @@ fn get_historical_payslip(
         )
         .map_err(|e| e.to_string())?;
 
-    Ok(row)
+    Ok(result)
 }
 
 // Get available periods (from both salary_calculations and paies)
@@ -2556,12 +2668,49 @@ async fn get_pre_calc_summary(state: State<'_, AppState>, employee_id: i64, peri
         )
         .unwrap_or(0);
 
+    // Get leaves for this period (approved + pending)
+    let mut leave_stmt = conn
+        .prepare(r#"SELECT id, leave_type, start_date, end_date, days_count, reason, status
+                    FROM leaves
+                    WHERE employee_id=? AND date(start_date) < date(?) AND date(end_date) >= date(?)
+                    ORDER BY start_date"#)
+        .map_err(|e| e.to_string())?;
+    let leave_rows = leave_stmt.query_map(rusqlite::params![employee_id, next_month_start, month_start], |row| {
+        Ok(serde_json::json!({
+            "id": row.get::<_, i64>(0)?,
+            "leave_type": row.get::<_, String>(1)?,
+            "start_date": row.get::<_, String>(2)?,
+            "end_date": row.get::<_, String>(3)?,
+            "days_count": row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+            "reason": row.get::<_, Option<String>>(5)?,
+            "status": row.get::<_, String>(6)?,
+        }))
+    }).map_err(|e| e.to_string())?;
+    let mut leaves = Vec::new();
+    let mut pending_count = 0;
+    for row in leave_rows {
+        let leave = row.map_err(|e| e.to_string())?;
+        if leave["status"].as_str() == Some("pending") { pending_count += 1; }
+        leaves.push(leave);
+    }
+
+    // Compute conge/sick days using calculator's function (approved only)
+    let (conge_days, sick_days) = calculator::compute_leave_days_pub(&conn, employee_id, &period);
+    let working_days = calculator::compute_working_days_pub(&period);
+    let absent_days = calculator::compute_absent_days_pub(&conn, employee_id, &period, working_days as f64, conge_days + sick_days);
+
     Ok(serde_json::json!({
         "employee": emp,
         "rubriques": rubriques,
         "bonuses": bonuses,
         "overtime": overtime,
         "attendance_days": attendance_days,
+        "leaves": leaves,
+        "pending_leave_count": pending_count,
+        "conge_days": conge_days,
+        "sick_days": sick_days,
+        "absent_days": absent_days,
+        "working_days": working_days,
         "period": period,
     }))
     })
@@ -3123,6 +3272,9 @@ pub fn run() {
             get_leaves,
             create_leave,
             delete_leave,
+            approve_leave,
+            reject_leave,
+            get_leave_balance,
             get_bonuses,
             create_bonus,
             delete_bonus,

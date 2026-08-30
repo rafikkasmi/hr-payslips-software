@@ -84,6 +84,7 @@ dependencies = [
  "encoding_rs",
  "log",
  "rayon",
+ "regex",
  "rfd 0.15.4",
  "rusqlite",
  "serde",

@@ -12,12 +12,14 @@ pub struct DbfField {
     pub name: String,
     pub field_type: char,   // C, N, L, D, M, W
     pub length: u8,
+    #[allow(dead_code)]
     pub decimals: u8,
 }
 
 /// dBase file header metadata.
 #[derive(Debug)]
 pub struct DbfHeader {
+    #[allow(dead_code)]
     pub version: u8,
     pub record_count: u32,
     pub header_size: u16,
@@ -30,6 +32,7 @@ pub struct DbfReader {
     file: File,
     pub header: DbfHeader,
     /// Path to the associated .DBT memo file (if any).
+    #[allow(dead_code)]
     dbt_path: Option<String>,
     /// Cached memo file reader.
     dbt: Option<File>,
@@ -358,6 +361,7 @@ pub fn get_bool(record: &[(String, DbfValue)], name: &str) -> bool {
 }
 
 /// Helper: get an optional string value (returns None if empty).
+#[allow(dead_code)]
 pub fn get_opt_str(record: &[(String, DbfValue)], name: &str) -> Option<String> {
     let s = get_str(record, name);
     if s.is_empty() {

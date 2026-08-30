@@ -30,3 +30,4 @@ encoding_rs = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 rayon = "1"
+regex = "1"

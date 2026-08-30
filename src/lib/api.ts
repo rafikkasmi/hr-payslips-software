@@ -96,6 +96,16 @@ export interface CalcLine {
   classe: number;
   amount: number;
   is_input: boolean;
+  formula?: string;
+  evaluated_formula?: string;
+}
+
+export interface DebugLogEntry {
+  step: string;
+  code: string;
+  action: string;
+  value: number;
+  description: string;
 }
 
 export interface AppliedBonus {
@@ -124,6 +134,7 @@ export interface CalcResult {
   base_imposable: number;
   irg: number;
   applied_bonuses?: AppliedBonus[];
+  debug_log?: DebugLogEntry[];
 }
 
 export interface Leave {
@@ -398,6 +409,15 @@ export const api = {
 
   deleteLeave: (leaveId: number) =>
     invoke<void>("delete_leave", { leaveId }),
+
+  approveLeave: (leaveId: number) =>
+    invoke<void>("approve_leave", { leaveId }),
+
+  rejectLeave: (leaveId: number) =>
+    invoke<void>("reject_leave", { leaveId }),
+
+  getLeaveBalance: (employeeId: number) =>
+    invoke<{ entitled: number; used: number; remaining: number; pending: number; pers1_du_j: number; pers1_pr_j: number; pers1_ad_j: number; year: string }>("get_leave_balance", { employeeId }),
 
   getBonuses: () => invoke<Bonus[]>("get_bonuses"),
 

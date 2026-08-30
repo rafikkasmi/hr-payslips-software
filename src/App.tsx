@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { api, type AppStatus } from "./lib/api";
 import { SetupWizard } from "./components/SetupWizard";
 import { Sidebar, type Page } from "./components/Sidebar";
+import { ToastProvider } from "./components/ui/Toast";
 
 const EmployeesPage = lazy(() => import("./components/EmployeesPage").then(m => ({ default: m.EmployeesPage })));
 const ShiftsPage = lazy(() => import("./components/ShiftsPage").then(m => ({ default: m.ShiftsPage })));
@@ -57,6 +58,7 @@ function App() {
   }
 
   return (
+    <ToastProvider>
     <div className="flex h-screen bg-gray-50">
       <Sidebar currentPage={page} onNavigate={setPage} />
       <main className="flex-1 overflow-auto">
@@ -69,10 +71,11 @@ function App() {
           {page === "attendance" && <AttendancePage />}
           {page === "leaves" && <LeavesPage />}
           {page === "bonuses" && <BonusesPage />}
-          {page === "salary" && <SalaryPage />}
+          {page === "salary" && <SalaryPage onNavigate={setPage} />}
         </Suspense>
       </main>
     </div>
+    </ToastProvider>
   );
 }
 

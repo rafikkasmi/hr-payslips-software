@@ -381,7 +381,7 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             end_date TEXT NOT NULL,
             days_count REAL,
             reason TEXT,
-            status TEXT DEFAULT 'approved',
+            status TEXT DEFAULT 'pending',
             -- 'pending', 'approved', 'rejected'
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
@@ -758,6 +758,17 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
                 conn.execute(&format!("ALTER TABLE bonuses ADD COLUMN {} {}", col, def), [])?;
             }
         }
+
+        // Add is_impo15 column to rubriques if not exists
+        let rub_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(rubriques)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !rub_cols.iter().any(|c| c == "is_impo15") {
+            conn.execute("ALTER TABLE rubriques ADD COLUMN is_impo15 INTEGER DEFAULT 0", [])?;
+        }
+
         Ok(())
     })();
     match migration_result {
