@@ -12,6 +12,13 @@ import { RubFlagsModal } from "./salary/RubFlagsModal";
 import { OvertimeModal } from "./salary/OvertimeModal";
 import { PreCalcModal } from "./salary/PreCalcModal";
 import { WorkflowStepper } from "./salary/WorkflowStepper";
+import { PeriodSelector } from "./PeriodSelector";
+import { Modal } from "./ui/Modal";
+import {
+  Calculator, Calendar, Trash2, Loader2, ChevronDown, ChevronRight,
+  DollarSign, History, Play, Plus, Gift, Search, Clock,
+  Pause, FileText, Pencil, Tag, Users,
+} from "lucide-react";
 
 export function SalaryPage({ onNavigate }: { onNavigate?: (page: "dashboard" | "employees" | "postes" | "shifts" | "pointeuse" | "attendance" | "leaves" | "bonuses" | "salary") => void }) {
   const [periods, setPeriods] = useState<string[]>([]);
@@ -128,7 +135,7 @@ export function SalaryPage({ onNavigate }: { onNavigate?: (page: "dashboard" | "
       const p = await api.getAvailablePeriods();
       setPeriods(p);
       if (p.length > 0 && !selectedPeriod) {
-        setSelectedPeriod(p[p.length - 1]);
+        setSelectedPeriod(p[0]);
       }
     } catch (e) { console.error(e); }
   };
@@ -195,11 +202,12 @@ export function SalaryPage({ onNavigate }: { onNavigate?: (page: "dashboard" | "
     if (filterSection && e.section !== filterSection) return false;
     if (filterStructure && e.structure !== filterStructure) return false;
     if (filterAffectatio && e.affectatio !== filterAffectatio) return false;
+    if (!e.actif) return false;
     if (empSearch) {
       const q = empSearch.toLowerCase();
       if (!(`${e.nom} ${e.prenom} ${e.matricule}`).toLowerCase().includes(q)) return false;
     }
-    return e.actif;
+    return true;
   }), [employees, filterSection, filterStructure, filterAffectatio, empSearch]);
 
   const toggleEmp = (id: number) => {
@@ -900,11 +908,24 @@ export function SalaryPage({ onNavigate }: { onNavigate?: (page: "dashboard" | "
 
   return (
     <SalaryContext.Provider value={ctxValue}>
-      <div className="p-6 max-w-7xl mx-auto">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Gestion de la Paie</h1>
-            <p className="mt-1 text-sm text-gray-500">Calcul des salaires, primes et rubriques de paie</p>
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Gestion de la Paie</h1>
+          <p className="mt-1 text-sm text-gray-500">Calcul des salaires, primes et rubriques de paie</p>
+        </div>
+      </div>
+
+      {/* Action Bar */}
+      <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Calendar className="h-5 w-5 text-gray-400" />
+            <PeriodSelector
+              value={selectedPeriod || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`}
+              onChange={setSelectedPeriod}
+              availablePeriods={periods}
+            />
           </div>
         </div>
 
@@ -923,6 +944,7 @@ export function SalaryPage({ onNavigate }: { onNavigate?: (page: "dashboard" | "
         {payslipPreview && (
           <PayslipPDF result={payslipPreview} onClose={() => setPayslipPreview(null)} />
         )}
+      </div>
       </div>
     </SalaryContext.Provider>
   );

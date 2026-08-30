@@ -13,13 +13,14 @@ pub struct RubriqueDef {
     pub is_secu_s: bool,
     pub is_total: bool,
     pub is_imp: bool,
-    pub is_impo15: bool,
     pub is_init: bool,
     pub is_regular: bool,
     pub is_locked: bool,
     pub init_val: f64,
     pub ord_clc: f64,
     pub manuelle: bool,
+    pub cd_nb_base: Option<String>,
+    pub cd_taux: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +34,12 @@ pub struct CalcLine {
     pub formula: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluated_formula: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taux_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formule: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +49,12 @@ pub struct DebugLogEntry {
     pub action: String,
     pub value: f64,
     pub description: String,
+    #[serde(default)]
+    pub base_value: Option<f64>,
+    #[serde(default)]
+    pub taux_value: Option<f64>,
+    #[serde(default)]
+    pub formule: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,13 +88,16 @@ pub struct CalcResult {
     pub applied_bonuses: Vec<AppliedBonus>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub debug_log: Vec<DebugLogEntry>,
+    #[serde(default)]
+    pub t_values: std::collections::HashMap<String, f64>,
 }
 
 pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
     let mut stmt = conn
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
-               is_total, is_imp, is_impo15, is_init, is_regular, is_locked, init_val, ord_clc, manuelle
+               is_total, is_imp, is_init, is_regular, is_locked, init_val, ord_clc, manuelle,
+               cd_nb_base, cd_taux
                FROM rubriques ORDER BY ord_clc"#,
         )
         .map_err(|e| e.to_string())?;
@@ -98,13 +114,14 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
                 is_secu_s: row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
                 is_total: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
                 is_imp: row.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
-                is_impo15: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
-                is_init: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
-                is_regular: row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
-                is_locked: row.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
-                init_val: row.get::<_, Option<f64>>(13)?.unwrap_or(0.0),
-                ord_clc: row.get::<_, Option<f64>>(14)?.unwrap_or(0.0),
-                manuelle: row.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0,
+                is_init: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
+                is_regular: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+                is_locked: row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
+                init_val: row.get::<_, Option<f64>>(12)?.unwrap_or(0.0),
+                ord_clc: row.get::<_, Option<f64>>(13)?.unwrap_or(0.0),
+                manuelle: row.get::<_, Option<i64>>(14)?.unwrap_or(0) != 0,
+                cd_nb_base: row.get::<_, Option<String>>(15)?,
+                cd_taux: row.get::<_, Option<String>>(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -114,6 +131,116 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
         rubriques.push(row.map_err(|e| e.to_string())?);
     }
     Ok(rubriques)
+}
+
+/// Salary calculation settings loaded from salary_settings table.
+/// These override hardcoded defaults and are respected in all calculations.
+#[derive(Debug, Clone)]
+pub struct SalarySettings {
+    /// Code of the rubrique that totals cotisable base (default: "500")
+    pub cotisable_total_code: String,
+    /// Code of the rubrique that totals imposable base (default: "652")
+    pub imposable_total_code: String,
+    /// Code of the rubrique that totals brut (default: "763")
+    pub brut_total_code: String,
+    /// Code of the rubrique that totals gains (default: "765")
+    pub gains_total_code: String,
+    /// Code of the rubrique that totals retenues (default: "767")
+    pub retenues_total_code: String,
+    /// Code of the rubrique for net a payer (default: "770")
+    pub net_payer_code: String,
+    /// CNAS employee rate (default: 9.0)
+    pub cnas_employee_rate: f64,
+    /// CNAS employer rate (default: 26.0)
+    pub cnas_employer_rate: f64,
+    /// IRG abattement rate (default: 0.40)
+    pub irg_abattement_rate: f64,
+    /// IRG abattement min (default: 1000)
+    pub irg_abattement_min: f64,
+    /// IRG abattement max (default: 1500)
+    pub irg_abattement_max: f64,
+    /// IRG exoneration threshold (default: 30000)
+    pub irg_exoneration_threshold: f64,
+    /// SNMG (default: 24000)
+    pub snmg: f64,
+    /// Monthly hours (default: 173.33)
+    pub monthly_hours: f64,
+    /// Monthly days (default: 30)
+    pub monthly_days: f64,
+    /// Family charge reduction per person (default: 1500)
+    pub family_reduction: f64,
+}
+
+impl Default for SalarySettings {
+    fn default() -> Self {
+        SalarySettings {
+            cotisable_total_code: "500".to_string(),
+            imposable_total_code: "652".to_string(),
+            brut_total_code: "763".to_string(),
+            gains_total_code: "765".to_string(),
+            retenues_total_code: "767".to_string(),
+            net_payer_code: "770".to_string(),
+            cnas_employee_rate: 9.0,
+            cnas_employer_rate: 26.0,
+            irg_abattement_rate: 0.40,
+            irg_abattement_min: 1000.0,
+            irg_abattement_max: 1500.0,
+            irg_exoneration_threshold: 30000.0,
+            snmg: 24000.0,
+            monthly_hours: 173.33,
+            monthly_days: 30.0,
+            family_reduction: 1500.0,
+        }
+    }
+}
+
+/// Load salary settings from the database. Falls back to defaults if not set.
+pub fn load_salary_settings(conn: &Connection) -> SalarySettings {
+    let mut settings = SalarySettings::default();
+    let get = |key: &str| -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM salary_settings WHERE key=?",
+            [key],
+            |r| r.get::<_, String>(0),
+        ).ok()
+    };
+    if let Some(v) = get("cotisable_total_code") { settings.cotisable_total_code = v; }
+    if let Some(v) = get("imposable_total_code") { settings.imposable_total_code = v; }
+    if let Some(v) = get("brut_total_code") { settings.brut_total_code = v; }
+    if let Some(v) = get("gains_total_code") { settings.gains_total_code = v; }
+    if let Some(v) = get("retenues_total_code") { settings.retenues_total_code = v; }
+    if let Some(v) = get("net_payer_code") { settings.net_payer_code = v; }
+    if let Some(v) = get("cnas_employee_rate") { settings.cnas_employee_rate = v.parse().unwrap_or(9.0); }
+    if let Some(v) = get("cnas_employer_rate") { settings.cnas_employer_rate = v.parse().unwrap_or(26.0); }
+    if let Some(v) = get("irg_abattement_rate") { settings.irg_abattement_rate = v.parse().unwrap_or(0.40); }
+    if let Some(v) = get("irg_abattement_min") { settings.irg_abattement_min = v.parse().unwrap_or(1000.0); }
+    if let Some(v) = get("irg_abattement_max") { settings.irg_abattement_max = v.parse().unwrap_or(1500.0); }
+    if let Some(v) = get("irg_exoneration_threshold") { settings.irg_exoneration_threshold = v.parse().unwrap_or(30000.0); }
+    if let Some(v) = get("snmg") { settings.snmg = v.parse().unwrap_or(24000.0); }
+    if let Some(v) = get("monthly_hours") { settings.monthly_hours = v.parse().unwrap_or(173.33); }
+    if let Some(v) = get("monthly_days") { settings.monthly_days = v.parse().unwrap_or(30.0); }
+    if let Some(v) = get("family_reduction") { settings.family_reduction = v.parse().unwrap_or(1500.0); }
+    settings
+}
+
+/// Extract base and taux values for a rubrique from the current R[] values.
+/// Uses cd_nb_base and cd_taux metadata from the rubrique definition.
+fn extract_base_taux(rub: &RubriqueDef, r_values: &HashMap<String, f64>) -> (Option<f64>, Option<f64>) {
+    let base = rub.cd_nb_base.as_ref()
+        .and_then(|code| {
+            let c = code.trim();
+            if c.is_empty() { None } else { r_values.get(c).copied() }
+        });
+    let taux = rub.cd_taux.as_ref()
+        .and_then(|code| {
+            let c = code.trim();
+            if c.is_empty() { None } else { r_values.get(c).copied() }
+        });
+    // Only return if at least one is non-trivial (non-zero or meaningful)
+    if base.is_none() && taux.is_none() {
+        return (None, None);
+    }
+    (base, taux)
 }
 
 /// Check if a period is before September 2023.
@@ -230,12 +357,12 @@ pub fn bareme_irg_period(base: f64, prorata: f64, period: &str) -> f64 {
         bareme_brut_lf2022(rounded_base)
     };
 
-    // Abattement de 40%, plancher 1000, plafond 1500
+    // Abattement de 40%, plancher 1000, plafond 1500 (configurable via salary_settings)
     let abat = (raw * 0.40).clamp(1000.0, 1500.0);
     let mut irg = raw - abat;
 
     if !pre_2022 {
-        // Exoneration totale jusqu'a 30 000, puis zone de transition 30 000-35 000
+        // Exoneration totale jusqu'a 30 000 (configurable), puis zone de transition 30 000-35 000
         if rounded_base <= 30000.0 {
             irg = 0.0;
         } else if rounded_base < 35000.0 {
@@ -257,6 +384,18 @@ pub fn bareme_irg(base: f64, prorata: f64) -> f64 {
 /// Evaluate a PCPAIE formula expression
 /// Supports: R[NNN], T[NN], M, N, IRG(base, prorata), TOTAL(...), arithmetic + - * / ( )
 #[allow(dead_code)]
+/// Supports: R[NNN], T[NN], M, N, IRG(base, prorata), arithmetic + - * / ( )
+pub fn eval_formula_public(
+    formula: &str,
+    r_values: &HashMap<String, f64>,
+    t_values: &HashMap<usize, f64>,
+    m_val: f64,
+    n_val: f64,
+    period: &str,
+) -> Result<f64, String> {
+    eval_formula(formula, r_values, t_values, m_val, n_val, period)
+}
+
 fn eval_formula(
     formula: &str,
     r_values: &HashMap<String, f64>,
@@ -653,6 +792,7 @@ pub fn calculate_salary(
 ) -> Result<CalcResult, String> {
     let rubriques = load_rubriques(conn)?;
     let mut debug_log: Vec<DebugLogEntry> = Vec::new();
+    let sal_settings = load_salary_settings(conn);
 
     // Get employee info
     let (matricule, nom, prenom): (String, String, String) = conn
@@ -755,6 +895,7 @@ pub fn calculate_salary(
         step: "pre-compute".to_string(), code: "LEAVES".to_string(), action: "compute".to_string(),
         value: worked_days, description: format!("Jours ouvrables={}, congé={}, maladie={}, absence={}, travaillés={}",
             calendar_working_days, r099_pre, r089_pre, r033_pre, worked_days),
+        base_value: None, taux_value: None, formule: None,
     });
 
     // Load active bonuses for this employee/period and inject as input values
@@ -927,8 +1068,8 @@ pub fn calculate_salary(
     t_values.insert(4, 0.0); // retenues total
     // T[09] = standard working days for prorata. PCPAIE defaults to 30 (Algerian
     // standard month). Can be overridden via global_params key "9".
-    t_values.insert(9, 30.0); // T[09] = standard working days (PCPAIE default: 30)
-    t_values.insert(10, 173.33); // T[10] = monthly hours (standard)
+    t_values.insert(9, sal_settings.monthly_days); // T[09] = standard working days (configurable)
+    t_values.insert(10, sal_settings.monthly_hours); // T[10] = monthly hours (configurable)
     t_values.insert(15, 1.0); // T[15] = normal work ratio (full month)
     t_values.insert(16, 0.0); // T[16] = overtime ratio
     t_values.insert(17, 0.0); // T[17] = night/weekend ratio
@@ -1146,6 +1287,9 @@ pub fn calculate_salary(
                 is_input: false,
                 formula: Some("N050 * R010".to_string()),
                 evaluated_formula: Some(format!("{} * {:.2}", n050, r010)),
+                base_value: Some(n050),
+                taux_value: Some(r010),
+                formule: Some("N[050]*R[010]".to_string()),
             });
             // Add R050 to T[04] (total retenues)
             *t_values.entry(4).or_insert(0.0) += r050;
@@ -1175,6 +1319,7 @@ pub fn calculate_salary(
                 *r_values.get(code).unwrap_or(&0.0)
             };
             r_values.insert(code.clone(), amount);
+            let (base_value, taux_value) = extract_base_taux(rub, &r_values);
             lines.push(CalcLine {
                 code: code.clone(),
                 libelle: rub.libelle.clone(),
@@ -1183,6 +1328,9 @@ pub fn calculate_salary(
                 is_input: true,
                 formula: None,
                 evaluated_formula: None,
+                base_value,
+                taux_value,
+                formule: None,
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             continue;
@@ -1191,6 +1339,7 @@ pub fn calculate_salary(
         // Explicit input override (e.g. R532 when R531 parameter is missing)
         if m_val != 0.0 {
             r_values.insert(code.clone(), m_val);
+            let (base_value, taux_value) = extract_base_taux(rub, &r_values);
             lines.push(CalcLine {
                 code: code.clone(),
                 libelle: rub.libelle.clone(),
@@ -1199,6 +1348,9 @@ pub fn calculate_salary(
                 is_input: true,
                 formula: None,
                 evaluated_formula: None,
+                base_value,
+                taux_value,
+                formule: None,
             });
             accumulate_t(&mut t_values, rub, m_val, &mut cotisable_gains);
             continue;
@@ -1345,6 +1497,7 @@ pub fn calculate_salary(
             r_values.insert("010".to_string(), r010_save);
             t_values.insert(9, t09_save);
             t_values.insert(78, if t09_save != 0.0 { t10 / t09_save } else { 0.0 });
+            let (base_value, taux_value) = extract_base_taux(rub, &r_values);
             lines.push(CalcLine {
                 code: code.clone(),
                 libelle: rub.libelle.clone(),
@@ -1353,6 +1506,9 @@ pub fn calculate_salary(
                 is_input: false,
                 formula: rub.formule.clone(),
                 evaluated_formula: Some(format_formula(formula, &r_values, &t_values)),
+                base_value,
+                taux_value,
+                formule: rub.formule.clone(),
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             // After R655: restore R099 and reset T[15]=1.0
@@ -1389,6 +1545,7 @@ pub fn calculate_salary(
         }
 
         r_values.insert(code.clone(), amount);
+        let (base_value, taux_value) = extract_base_taux(rub, &r_values);
         lines.push(CalcLine {
             code: code.clone(),
             libelle: rub.libelle.clone(),
@@ -1397,10 +1554,16 @@ pub fn calculate_salary(
             is_input: false,
             formula: rub.formule.clone(),
             evaluated_formula: Some(format_formula(formula, &r_values, &t_values)),
+            base_value,
+            taux_value,
+            formule: rub.formule.clone(),
         });
         debug_log.push(DebugLogEntry {
             step: "formula".to_string(), code: code.clone(), action: "eval".to_string(),
             value: amount, description: format!("{} = {}", rub.libelle, formula),
+            base_value,
+            taux_value,
+            formule: rub.formule.clone(),
         });
         accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
 
@@ -1452,10 +1615,15 @@ pub fn calculate_salary(
     let total_gains = computed_gains;
     let total_retenues = computed_retenues;
 
-    let base_cotisable = r_values.get("500").copied().unwrap_or(0.0);
-    let base_imposable = r_values.get("652").copied().unwrap_or(0.0);
+    let base_cotisable = r_values.get(&sal_settings.cotisable_total_code).copied().unwrap_or(0.0);
+    let base_imposable = r_values.get(&sal_settings.imposable_total_code).copied().unwrap_or(0.0);
     let irg = r_values.get("660").copied().unwrap_or(0.0);
     let net_payer = total_gains - total_retenues;
+
+    // Export key T[] values for the simulator display
+    let t_export: std::collections::HashMap<String, f64> = t_values.iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
 
     Ok(CalcResult {
         employee_id,
@@ -1472,6 +1640,7 @@ pub fn calculate_salary(
         irg,
         applied_bonuses,
         debug_log,
+        t_values: t_export,
     })
 }
 
@@ -1562,7 +1731,8 @@ fn accumulate_t(
     }
     // IS_IMPO15: gains taxed at flat 10% (R642 base = T[51] - T[76]*T[53]*R[505]/100)
     // T[51] = sum of is_impo15 gains, T[53] = cotisable portion of those gains
-    if rub.is_impo15 {
+    // Note: is_impo15 column was removed from DB (not in schema). Feature disabled.
+    if false {
         *t_values.entry(51).or_insert(0.0) += amount; // T[51] = 10% tax base
         if rub.is_secu_s {
             *t_values.entry(53).or_insert(0.0) += amount; // T[53] = cotisable for 10%
@@ -2438,6 +2608,9 @@ mod tests {
             is_input: false,
             formula: Some("R[001]".to_string()),
             evaluated_formula: Some("50000.00".to_string()),
+            base_value: None,
+            taux_value: None,
+            formule: None,
         };
         assert_eq!(line.formula.as_deref(), Some("R[001]"));
         assert_eq!(line.evaluated_formula.as_deref(), Some("50000.00"));
@@ -2451,6 +2624,9 @@ mod tests {
             action: "compute".to_string(),
             value: 22.0,
             description: "Jours travaillés=22".to_string(),
+            base_value: None,
+            taux_value: None,
+            formule: None,
         };
         assert_eq!(entry.step, "pre-compute");
         assert_eq!(entry.code, "LEAVES");
@@ -2478,6 +2654,9 @@ mod tests {
                 action: "eval".to_string(),
                 value: 50000.0,
                 description: "test".to_string(),
+                base_value: None,
+                taux_value: None,
+                formule: None,
             }],
         };
         assert_eq!(result.debug_log.len(), 1);

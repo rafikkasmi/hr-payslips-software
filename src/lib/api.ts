@@ -78,6 +78,45 @@ export interface EmployeeSummary {
   section: string | null;
   structure: string | null;
   affectatio: string | null;
+  poste_name: string | null;
+  fnc_code: string | null;
+  sexe: string | null;
+  sit_fam: string | null;
+  categorie: string | null;
+  unite: string | null;
+  total_count: number;
+}
+
+export interface EmployeeFilterOptions {
+  sections: string[];
+  structures: string[];
+  unites: string[];
+  categories: string[];
+  postes: { id: number; name: string }[];
+  sexes: string[];
+  contrats: string[];
+  echelons: string[];
+  classes: string[];
+}
+
+export interface EmployeeFilters {
+  search?: string | null;
+  actif_only?: boolean | null;
+  poste_id?: number | null;
+  section?: string | null;
+  structure?: string | null;
+  unite?: string | null;
+  categorie?: string | null;
+  sexe?: string | null;
+  contrat?: string | null;
+  echelon?: string | null;
+  classe?: string | null;
+  hire_date_from?: string | null;
+  hire_date_to?: string | null;
+  exit_date_from?: string | null;
+  exit_date_to?: string | null;
+  page?: number | null;
+  page_size?: number | null;
 }
 
 export interface Shift {
@@ -96,16 +135,6 @@ export interface CalcLine {
   classe: number;
   amount: number;
   is_input: boolean;
-  formula?: string;
-  evaluated_formula?: string;
-}
-
-export interface DebugLogEntry {
-  step: string;
-  code: string;
-  action: string;
-  value: number;
-  description: string;
 }
 
 export interface AppliedBonus {
@@ -134,7 +163,6 @@ export interface CalcResult {
   base_imposable: number;
   irg: number;
   applied_bonuses?: AppliedBonus[];
-  debug_log?: DebugLogEntry[];
 }
 
 export interface Leave {
@@ -230,7 +258,15 @@ export interface PosteSummary {
   id: number;
   name: string;
   description: string | null;
+  fnc_code: string | null;
+  is_manual: boolean;
   employee_count: number;
+  active_count: number;
+  avg_seniority_years: number;
+  total_brut: number;
+  total_net: number;
+  avg_brut: number;
+  last_period: string | null;
 }
 
 export interface PosteRubrique {
@@ -244,9 +280,18 @@ export interface PosteRubrique {
 }
 
 export interface PosteDetail {
-  poste: { id: number; name: string; description: string | null };
+  poste: { id: number; name: string; description: string | null; fnc_code: string | null; is_manual: boolean };
   rubriques: PosteRubrique[];
   employees: { id: number; matricule: string; nom: string; prenom: string; actif: boolean }[];
+  stats: {
+    employee_count: number;
+    active_count: number;
+    avg_seniority_years: number;
+    total_brut: number;
+    total_net: number;
+    avg_brut: number;
+    last_period: string | null;
+  };
 }
 
 export interface EmployeeRubrique {
@@ -299,7 +344,27 @@ export const api = {
   bulkLinkUsers: (links: [number, number][]) =>
     invoke<number>("bulk_link_users", { links }),
 
-  getEmployees: () => invoke<EmployeeSummary[]>("get_employees"),
+  getEmployees: (filters: EmployeeFilters = {}) =>
+    invoke<EmployeeSummary[]>("get_employees", {
+      search: filters.search ?? null,
+      actifOnly: filters.actif_only ?? null,
+      posteId: filters.poste_id ?? null,
+      section: filters.section ?? null,
+      structure: filters.structure ?? null,
+      unite: filters.unite ?? null,
+      categorie: filters.categorie ?? null,
+      sexe: filters.sexe ?? null,
+      contrat: filters.contrat ?? null,
+      echelon: filters.echelon ?? null,
+      classe: filters.classe ?? null,
+      hireDateFrom: filters.hire_date_from ?? null,
+      hireDateTo: filters.hire_date_to ?? null,
+      exitDateFrom: filters.exit_date_from ?? null,
+      exitDateTo: filters.exit_date_to ?? null,
+      page: filters.page ?? 1,
+      pageSize: filters.page_size ?? 50,
+    }),
+  getEmployeeFilterOptions: () => invoke<EmployeeFilterOptions>("get_employee_filter_options"),
 
   getEmployeeDetail: (employeeId: number) =>
     invoke<Record<string, unknown>>("get_employee_detail", { employeeId }),
@@ -376,6 +441,7 @@ export const api = {
     }),
 
   getAvailablePeriods: () => invoke<string[]>("get_available_periods"),
+  getEmployeeSalaryPeriods: (employeeId: number) => invoke<string[]>("get_employee_salary_periods", { employeeId }),
 
   deleteMonthCalculations: (period: string) =>
     invoke<number>("delete_month_calculations", { period }),
@@ -499,6 +565,34 @@ export const api = {
       isSecuS: isSecuS === false ? 0 : 1,
     }),
 
+  updateRubrique: (code: string, updates: {
+    libelle?: string | null;
+    formule?: string | null;
+    classe?: number | null;
+    is_brut?: number | null;
+    is_impos?: number | null;
+    is_secu_s?: number | null;
+    is_total?: number | null;
+    is_imp?: number | null;
+    manuelle?: number | null;
+    init_val?: number | null;
+    ord_clc?: number | null;
+  }) =>
+    invoke<void>("update_rubrique", {
+      code,
+      libelle: updates.libelle ?? null,
+      formule: updates.formule ?? null,
+      classe: updates.classe ?? null,
+      isBrut: updates.is_brut ?? null,
+      isImpos: updates.is_impos ?? null,
+      isSecuS: updates.is_secu_s ?? null,
+      isTotal: updates.is_total ?? null,
+      isImp: updates.is_imp ?? null,
+      manuelle: updates.manuelle ?? null,
+      initVal: updates.init_val ?? null,
+      ordClc: updates.ord_clc ?? null,
+    }),
+
   updateRubriqueFlags: (code: string, flags: { isSecuS?: boolean; isImpos?: boolean; isBrut?: boolean }) =>
     invoke<void>("update_rubrique_flags", {
       code,
@@ -506,10 +600,30 @@ export const api = {
       isImpos: flags.isImpos ?? null,
       isBrut: flags.isBrut ?? null,
     }),
+
+  deleteRubrique: (code: string) =>
+    invoke<void>("delete_rubrique", { code }),
+
+  testRubriqueFormula: (code: string, formule: string, employeeId?: number, period?: string) =>
+    invoke<{ success: boolean; value?: number; error?: string; formula: string; code: string }>(
+      "test_rubrique_formula",
+      { code, formule, employeeId: employeeId ?? null, period: period ?? null }
+    ),
+
   getLookupValues: (tableName?: string) =>
     invoke<Record<string, unknown>[]>("get_lookup_values", {
       tableName: tableName ?? null,
     }),
+
+  // Salary settings (global parameterization)
+  getSalarySettings: () =>
+    invoke<Record<string, string>>("get_salary_settings"),
+
+  setSalarySetting: (key: string, value: string) =>
+    invoke<void>("set_salary_setting", { key, value }),
+
+  setSalarySettings: (settings: Record<string, string>) =>
+    invoke<void>("set_salary_settings", { settings }),
 
   // File dialog helpers
   pickFile: (filters?: { name: string; extensions: string[] }[]) =>
@@ -530,8 +644,12 @@ export const api = {
     invoke<void>("delete_poste", { posteId }),
   updatePosteRubrique: (posteId: number, rubriqueCode: string, defaultValue: number) =>
     invoke<void>("update_poste_rubrique", { posteId, rubriqueCode, defaultValue }),
+  deletePosteRubrique: (posteId: number, rubriqueCode: string) =>
+    invoke<void>("delete_poste_rubrique", { posteId, rubriqueCode }),
   assignEmployeeToPoste: (employeeId: number, posteId: number | null) =>
     invoke<void>("assign_employee_to_poste", { employeeId, posteId }),
+  syncPostesFromFnc: () => invoke<number>("sync_postes_from_fnc"),
+  recomputePosteStats: () => invoke<number>("recompute_poste_stats"),
 
   // Employee salary & primes
   getEmployeeCurrentRubriques: (employeeId: number) =>
@@ -592,4 +710,65 @@ export const api = {
   // Pre-calc summary
   getPreCalcSummary: (employeeId: number, period: string) =>
     invoke<Record<string, unknown>>("get_pre_calc_summary", { employeeId, period }),
+
+  getEmployeeSalaryHistory: (employeeId: number, onlyRealMonths?: boolean) =>
+    invoke<SalaryHistory>("get_employee_salary_history", { employeeId, only_real_months: onlyRealMonths ?? false }),
+
+  // Field mappings (PCPAIE data mapping config)
+  getFieldMappings: () => invoke<FieldMapping[]>("get_field_mappings"),
+  updateFieldMapping: (m: UpdateFieldMapping) =>
+    invoke<void>("update_field_mapping", {
+      id: m.id,
+      display_label: m.display_label,
+      employee_column: m.employee_column,
+      lookup_table: m.lookup_table ?? null,
+      section: m.section,
+      is_visible: m.is_visible,
+    }),
+  getAvailableLookupTables: () => invoke<string[]>("get_available_lookup_tables"),
+  getLookupTablePreview: (tableName: string, limit?: number) =>
+    invoke<LookupTablePreview>("get_lookup_table_preview", { tableName, limit: limit ?? 50 }),
+  getAllLookupTablesPreview: () => invoke<Record<string, LookupTablePreview>>("get_all_lookup_tables_preview"),
+  getAvailableEmployeeColumns: () => invoke<string[]>("get_available_employee_columns"),
+  exportDatabase: (destPath: string) => invoke<string>("export_database", { destPath }),
+  getDatabaseStats: () => invoke<Record<string, number>>("get_database_stats"),
 };
+
+export interface LookupTableValue {
+  code: string;
+  libelle: string;
+}
+
+export interface LookupTablePreview {
+  table_name: string;
+  total: number;
+  values: LookupTableValue[];
+}
+
+export interface SalaryHistory {
+  employee_id: number;
+  periods: string[];
+  rubriques: { code: string; libelle: string | null }[];
+  series: { code: string; libelle: string | null; data: (number | null)[] }[];
+  count: number;
+}
+
+export interface FieldMapping {
+  id: number;
+  logical_name: string;
+  display_label: string;
+  employee_column: string;
+  lookup_table: string | null;
+  section: string;
+  sort_order: number;
+  is_visible: boolean;
+}
+
+export interface UpdateFieldMapping {
+  id: number;
+  display_label: string;
+  employee_column: string;
+  lookup_table: string | null;
+  section: string;
+  is_visible: boolean;
+}

@@ -222,6 +222,9 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             nbr_enf_af REAL DEFAULT 0,
             nbr_prs_ch REAL DEFAULT 0,
             no_profil REAL DEFAULT 0,
+            -- DAS (site/lieu de travail) and EMP (niveau scolarité)
+            site_code TEXT,
+            scolarite_code TEXT,
             -- PERS1 extra fields (congés, notes, jours ouvrables)
             conge_du_j REAL DEFAULT 0,
             conge_du_c REAL DEFAULT 0,
@@ -460,6 +463,13 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             value REAL
         );
 
+        -- Salary calculation settings (global parameterization)
+        CREATE TABLE IF NOT EXISTS salary_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
         -- Lookup values (from VALEURS table)
         CREATE TABLE IF NOT EXISTS lookup_values (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -491,13 +501,16 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             clot_annee REAL
         );
 
-        -- Postes (Jobs) - auto-derived from employee rubrique clusters
+        -- Postes (Jobs) - auto-derived from employee rubrique clusters or PCPAIE FNC
         CREATE TABLE IF NOT EXISTS postes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             description TEXT,
+            fnc_code TEXT,  -- PCPAIE function code (lookup_values FNC)
+            is_manual INTEGER DEFAULT 0,  -- 0 = from PCPAIE, 1 = user-created
             created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(fnc_code)
         );
 
         -- Poste rubrique defaults (fixed rubriques per poste)
@@ -512,6 +525,20 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             UNIQUE(poste_id, rubrique_code)
         );
 
+        -- Poste statistics cache (computed from latest payslip per employee)
+        CREATE TABLE IF NOT EXISTS poste_stats (
+            poste_id INTEGER PRIMARY KEY,
+            employee_count INTEGER DEFAULT 0,
+            active_count INTEGER DEFAULT 0,
+            avg_seniority_years REAL DEFAULT 0,
+            total_brut REAL DEFAULT 0,
+            total_net REAL DEFAULT 0,
+            avg_brut REAL DEFAULT 0,
+            last_period TEXT,
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (poste_id) REFERENCES postes(id) ON DELETE CASCADE
+        );
+
         -- Employee salary history (track all changes to rubrique values)
         CREATE TABLE IF NOT EXISTS employee_salary_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -523,6 +550,18 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             reason TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+        );
+
+        -- Field mappings: configurable PCPAIE field -> employee column + lookup table
+        CREATE TABLE IF NOT EXISTS field_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            logical_name TEXT NOT NULL UNIQUE,  -- e.g. "categorie_socio_pro"
+            display_label TEXT NOT NULL,         -- e.g. "Catégorie socio-pro"
+            employee_column TEXT NOT NULL,       -- e.g. "categ_sp"
+            lookup_table TEXT,                   -- e.g. "CAT" or NULL for raw value
+            section TEXT DEFAULT 'Professionnel', -- UI section in employee detail
+            sort_order INTEGER DEFAULT 0,
+            is_visible INTEGER DEFAULT 1
         );
 
         -- Employee rubrique overrides (individual values that override poste defaults)
@@ -713,10 +752,19 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             no_salar REAL DEFAULT 0
         );
 
+        -- Indexes for poste/employee linking (non-dependent)
+        CREATE INDEX IF NOT EXISTS idx_employees_sect1 ON employees(sect1);
+
         -- Indexes on paies (1.5M records) — critical for seed_postes performance
         CREATE INDEX IF NOT EXISTS idx_paies_emp ON paies(employee_id);
         CREATE INDEX IF NOT EXISTS idx_paies_emp_mois ON paies(employee_id, mois DESC);
         CREATE INDEX IF NOT EXISTS idx_paies_mois ON paies(mois);
+
+        -- Missing indexes identified by audit (ones that don't depend on migrations)
+        CREATE INDEX IF NOT EXISTS idx_salary_calc_period ON salary_calculations(period);
+        CREATE INDEX IF NOT EXISTS idx_poste_rubriques_poste ON poste_rubriques(poste_id);
+        CREATE INDEX IF NOT EXISTS idx_leaves_employee ON leaves(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_attendance_emp_date ON attendance(employee_id, punch_datetime);
         "#,
     )?;
 
@@ -732,6 +780,59 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             .any(|col| col == "poste_id");
         if !has_poste_id {
             conn.execute("ALTER TABLE employees ADD COLUMN poste_id INTEGER REFERENCES postes(id)", [])?;
+        }
+
+        // Add fnc_code/is_manual columns to postes if not exists
+        let poste_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(postes)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        for (col, def) in [("fnc_code", "TEXT"), ("is_manual", "INTEGER DEFAULT 0")] {
+            if !poste_cols.iter().any(|c| c == col) {
+                conn.execute(&format!("ALTER TABLE postes ADD COLUMN {} {}", col, def), [])?;
+            }
+        }
+
+        // Add site_code/scolarite_code columns to employees if not exists
+        let emp_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(employees)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        for (col, def) in [("site_code", "TEXT"), ("scolarite_code", "TEXT")] {
+            if !emp_cols.iter().any(|c| c == col) {
+                conn.execute(&format!("ALTER TABLE employees ADD COLUMN {} {}", col, def), [])?;
+            }
+        }
+
+        // Seed default field_mappings if empty
+        let mapping_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM field_mappings", [], |r| r.get(0))
+            .unwrap_or(0);
+        if mapping_count == 0 {
+            let defaults = [
+                ("fonction", "Fonction", "sect1", "FNC", "Professionnel", 1),
+                ("categorie_socio_pro", "Catégorie socio-pro", "categ_sp", "CAT", "Professionnel", 2),
+                ("corps_metier", "Corps/Groupe métier", "categorie", "CON", "Professionnel", 3),
+                ("famille_departement", "Famille/Département", "structure", "SEC", "Professionnel", 4),
+                ("niveau_hierarchique", "Niveau hiérarchique", "unite", "UNT", "Professionnel", 5),
+                ("niveau_etude", "Niveau d'étude", "affectatio", "AFF", "Professionnel", 6),
+                ("diplome", "Diplôme", "diplome", "DIP", "Professionnel", 7),
+                ("site", "Site/Lieu de travail", "site_code", "DAS", "Professionnel", 8),
+                ("etablissement", "Établissement", "attrib1", "AT1", "Professionnel", 9),
+                ("service", "Service/Département", "attrib2", "AT2", "Professionnel", 10),
+                ("lieu_precis", "Lieu précis", "attrib3", "AT3", "Professionnel", 11),
+                ("niveau_scolarite", "Niveau scolarité", "scolarite_code", "EMP", "Professionnel", 12),
+                ("banque", "Banque", "org_payeur", "BNQ", "Sécurité sociale & Banque", 1),
+                ("motif_sortie", "Motif de sortie", "motif_sort", "MTF", "Professionnel", 13),
+            ];
+            for (logical, label, col, lookup, section, order) in &defaults {
+                conn.execute(
+                    "INSERT OR IGNORE INTO field_mappings (logical_name, display_label, employee_column, lookup_table, section, sort_order, is_visible) VALUES (?, ?, ?, ?, ?, ?, 1)",
+                    rusqlite::params![logical, label, col, lookup, section, order],
+                )?;
+            }
         }
 
         // Add extended bonus columns if they don't exist
@@ -779,6 +880,16 @@ fn create_schema(conn: &Connection) -> rusqlite::Result<()> {
             return Err(e);
         }
     }
+
+    // Indexes that depend on migrated columns (poste_id, fnc_code, bonuses columns)
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_employees_poste ON employees(poste_id);
+        CREATE INDEX IF NOT EXISTS idx_postes_fnc ON postes(fnc_code);
+        CREATE INDEX IF NOT EXISTS idx_bonuses_status ON bonuses(status);
+        CREATE INDEX IF NOT EXISTS idx_bonuses_created ON bonuses(created_at DESC);
+        "#,
+    )?;
 
     Ok(())
 }

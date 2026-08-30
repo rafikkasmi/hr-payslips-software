@@ -106,19 +106,32 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
             <div>
               <h3 className="text-xs font-bold text-gray-700 mb-1 pb-0.5 border-b border-gray-300 bg-green-50/50 px-2 py-1 rounded-t">Gains & Primes</h3>
               <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-400 text-[10px]">
+                    <th className="py-0.5 text-left font-normal w-8">Code</th>
+                    <th className="py-0.5 text-left font-normal">Libellé</th>
+                    <th className="py-0.5 text-right font-normal w-16">Base</th>
+                    <th className="py-0.5 text-right font-normal w-14">Taux</th>
+                    <th className="py-0.5 text-right font-normal w-20">Montant</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {gains.map((line) => (
                     <tr key={line.code} className="border-b border-gray-100">
-                      <td className="py-0.5 font-mono text-gray-400 w-10">{line.code}</td>
+                      <td className="py-0.5 font-mono text-gray-400 w-8">{line.code}</td>
                       <td className="py-0.5 text-gray-700">{line.libelle}</td>
-                      <td className="py-0.5 text-right font-medium text-gray-900 w-24">{formatCurrency(line.amount)}</td>
+                      <td className="py-0.5 text-right text-gray-500 w-16">{line.base_value != null && line.base_value !== 0 ? formatCurrency(line.base_value) : "—"}</td>
+                      <td className="py-0.5 text-right text-gray-500 w-14">{line.taux_value != null && line.taux_value !== 0 ? (line.taux_value < 1 ? line.taux_value.toFixed(2) : line.taux_value.toFixed(0)) : "—"}</td>
+                      <td className="py-0.5 text-right font-medium text-gray-900 w-20">{formatCurrency(line.amount)}</td>
                     </tr>
                   ))}
                   {bonusGains.map((b) => (
                     <tr key={`bg-${b.id}`} className="border-b border-gray-100 bg-green-50/30">
-                      <td className="py-0.5 font-mono text-gray-400 w-10">{b.rubrique_code ?? "—"}</td>
+                      <td className="py-0.5 font-mono text-gray-400 w-8">{b.rubrique_code ?? "—"}</td>
                       <td className="py-0.5 text-gray-700 italic">{b.title}</td>
-                      <td className="py-0.5 text-right font-medium text-green-700 w-24">{formatCurrency(b.computed_amount)}</td>
+                      <td className="py-0.5 text-right text-gray-300 w-16">—</td>
+                      <td className="py-0.5 text-right text-gray-300 w-14">—</td>
+                      <td className="py-0.5 text-right font-medium text-green-700 w-20">{formatCurrency(b.computed_amount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -129,19 +142,32 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
             <div>
               <h3 className="text-xs font-bold text-gray-700 mb-1 pb-0.5 border-b border-gray-300 bg-red-50/50 px-2 py-1 rounded-t">Retenues</h3>
               <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-400 text-[10px]">
+                    <th className="py-0.5 text-left font-normal w-8">Code</th>
+                    <th className="py-0.5 text-left font-normal">Libellé</th>
+                    <th className="py-0.5 text-right font-normal w-16">Base</th>
+                    <th className="py-0.5 text-right font-normal w-14">Taux</th>
+                    <th className="py-0.5 text-right font-normal w-20">Montant</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {retenues.map((line) => (
                     <tr key={line.code} className="border-b border-gray-100">
-                      <td className="py-0.5 font-mono text-gray-400 w-10">{line.code}</td>
+                      <td className="py-0.5 font-mono text-gray-400 w-8">{line.code}</td>
                       <td className="py-0.5 text-gray-700">{line.libelle}</td>
-                      <td className="py-0.5 text-right font-medium text-red-600 w-24">{formatCurrency(Math.abs(line.amount))}</td>
+                      <td className="py-0.5 text-right text-gray-500 w-16">{line.base_value != null && line.base_value !== 0 ? formatCurrency(line.base_value) : "—"}</td>
+                      <td className="py-0.5 text-right text-gray-500 w-14">{line.taux_value != null && line.taux_value !== 0 ? (line.taux_value < 1 ? line.taux_value.toFixed(2) : line.taux_value.toFixed(0)) : "—"}</td>
+                      <td className="py-0.5 text-right font-medium text-red-600 w-20">{formatCurrency(Math.abs(line.amount))}</td>
                     </tr>
                   ))}
                   {bonusRetenues.map((b) => (
                     <tr key={`br-${b.id}`} className="border-b border-gray-100 bg-red-50/30">
-                      <td className="py-0.5 font-mono text-gray-400 w-10">{b.rubrique_code ?? "—"}</td>
+                      <td className="py-0.5 font-mono text-gray-400 w-8">{b.rubrique_code ?? "—"}</td>
                       <td className="py-0.5 text-gray-700 italic">{b.title}</td>
-                      <td className="py-0.5 text-right font-medium text-red-600 w-24">{formatCurrency(Math.abs(b.computed_amount))}</td>
+                      <td className="py-0.5 text-right text-gray-300 w-16">—</td>
+                      <td className="py-0.5 text-right text-gray-300 w-14">—</td>
+                      <td className="py-0.5 text-right font-medium text-red-600 w-20">{formatCurrency(Math.abs(b.computed_amount))}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -13,6 +13,9 @@ const SalaryPage = lazy(() => import("./components/SalaryPage").then(m => ({ def
 const AttendancePage = lazy(() => import("./components/AttendancePage").then(m => ({ default: m.AttendancePage })));
 const DashboardPage = lazy(() => import("./components/DashboardPage").then(m => ({ default: m.DashboardPage })));
 const PostesPage = lazy(() => import("./components/PostesPage").then(m => ({ default: m.PostesPage })));
+const RubriquesPage = lazy(() => import("./components/RubriquesPage").then(m => ({ default: m.RubriquesPage })));
+const SimulatorPage = lazy(() => import("./components/SimulatorPage").then(m => ({ default: m.SimulatorPage })));
+const SettingsPage = lazy(() => import("./components/SettingsPage").then(m => ({ default: m.SettingsPage })));
 
 function PageLoader() {
   return (
@@ -66,12 +69,15 @@ function App() {
           {page === "dashboard" && <DashboardPage status={status} />}
           {page === "employees" && <EmployeesPage />}
           {page === "postes" && <PostesPage />}
+          {page === "rubriques" && <RubriquesPage />}
+          {page === "simulator" && <SimulatorPage />}
           {page === "shifts" && <ShiftsPage />}
           {page === "pointeuse" && <PointeusePage />}
           {page === "attendance" && <AttendancePage />}
           {page === "leaves" && <LeavesPage />}
           {page === "bonuses" && <BonusesPage />}
           {page === "salary" && <SalaryPage onNavigate={setPage} />}
+          {page === "settings" && <SettingsPage />}
         </Suspense>
       </main>
     </div>
