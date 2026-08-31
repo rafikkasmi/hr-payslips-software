@@ -135,6 +135,8 @@ export interface CalcLine {
   classe: number;
   amount: number;
   is_input: boolean;
+  is_secu_s?: boolean;
+  is_impos?: boolean;
 }
 
 export interface AppliedBonus {

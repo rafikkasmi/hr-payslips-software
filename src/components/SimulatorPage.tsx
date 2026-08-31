@@ -253,26 +253,41 @@ export function SimulatorPage() {
     };
   }, [selectedEmpId, period, simRubriques, recalculate]);
 
-  const gains = useMemo(() =>
-    calcResult?.lines.filter(l => l.amount !== 0 && l.classe === 1 && l.amount > 0) ?? [],
-    [calcResult]
-  );
-  const retenues = useMemo(() =>
-    calcResult?.lines.filter(l => l.amount !== 0 && (l.classe === 2 || (l.classe === 1 && l.amount < 0))) ?? [],
-    [calcResult]
-  );
-  const taux = useMemo(() =>
-    calcResult?.lines.filter(l => l.amount !== 0 && l.classe === 5) ?? [],
-    [calcResult]
-  );
-  const compteurs = useMemo(() =>
-    calcResult?.lines.filter(l => l.amount !== 0 && (l.classe === 7 || l.classe === 0)) ?? [],
-    [calcResult]
-  );
-  const infos = useMemo(() => {
-    if (!calcResult) return [];
-    const keyCodes = ["763", "765", "767", "770", "807", "817", "819", "824"];
-    return calcResult.lines.filter(l => keyCodes.includes(l.code) && l.amount !== 0);
+  // Segment lines by nature (PCPAIE logic)
+  const segments = useMemo(() => {
+    if (!calcResult) return null;
+    const lines = calcResult.lines.filter(l => l.amount !== 0);
+    // Gains cotisables (classe=1, is_secu_s=1, amount>0)
+    const gainsCotisables = lines.filter(l => l.classe === 1 && l.amount > 0 && l.is_secu_s);
+    // Gains imposables non cotisables (classe=1, is_secu_s=0, is_impos=1, amount>0)
+    const gainsImpNonCot = lines.filter(l => l.classe === 1 && l.amount > 0 && !l.is_secu_s && l.is_impos);
+    // Gains exonérés (classe=1, is_secu_s=0, is_impos=0, amount>0)
+    const gainsExoneres = lines.filter(l => l.classe === 1 && l.amount > 0 && !l.is_secu_s && !l.is_impos);
+    // Retenues cotisables (classe=2, is_secu_s=1)
+    const retenuesCotisables = lines.filter(l => l.classe === 2 && l.is_secu_s);
+    // Retenues imposables non cotisables (classe=2, is_secu_s=0, is_impos=1)
+    const retenuesImpNonCot = lines.filter(l => l.classe === 2 && !l.is_secu_s && l.is_impos);
+    // Retenues non cotisables non imposables (classe=2, is_secu_s=0, is_impos=0) — CNAS, IRG, acomptes
+    const retenuesDiverses = lines.filter(l => l.classe === 2 && !l.is_secu_s && !l.is_impos);
+    // CNAS 9% (R510) and IRG (R660) are in retenuesDiverses
+    const cnas = lines.find(l => l.code === "510");
+    const irg = lines.find(l => l.code === "660");
+    // Totaux from calcResult
+    return {
+      gainsCotisables,
+      gainsImpNonCot,
+      gainsExoneres,
+      retenuesCotisables,
+      retenuesImpNonCot,
+      retenuesDiverses,
+      cnas,
+      irg,
+      baseCotisable: calcResult.base_cotisable,
+      totalBrut: calcResult.total_brut,
+      baseImposable: calcResult.base_imposable,
+      totalRetenues: calcResult.total_retenues,
+      netPayer: calcResult.net_payer,
+    };
   }, [calcResult]);
 
   const classeLabels: Record<number, string> = {
@@ -469,32 +484,6 @@ export function SimulatorPage() {
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto p-3">
-              {/* Net à payer + totaux — barre de synthèse */}
-              <div className="mb-3 flex items-center gap-2">
-                <div className="flex items-center justify-between rounded-lg border-2 border-green-600 bg-green-50 px-4 py-2 flex-1">
-                  <span className="text-sm font-bold text-gray-900">NET À PAYER</span>
-                  <span className="text-xl font-bold text-green-700">{formatCurrency(calcResult.net_payer)}</span>
-                </div>
-              </div>
-              <div className="mb-3 grid grid-cols-4 gap-1.5">
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
-                  <p className="text-[10px] text-gray-500">Brut</p>
-                  <p className="text-xs font-bold text-gray-900">{formatCurrency(calcResult.total_brut)}</p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
-                  <p className="text-[10px] text-gray-500">Cotisable</p>
-                  <p className="text-xs font-bold text-gray-900">{formatCurrency(calcResult.base_cotisable)}</p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
-                  <p className="text-[10px] text-gray-500">Imposable</p>
-                  <p className="text-xs font-bold text-gray-900">{formatCurrency(calcResult.base_imposable)}</p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
-                  <p className="text-[10px] text-gray-500">Retenues</p>
-                  <p className="text-xs font-bold text-red-600">{formatCurrency(calcResult.total_retenues)}</p>
-                </div>
-              </div>
-
               {/* Scénarios */}
               {simRubriques.length > 0 && (
                 <div className="mb-2 flex flex-wrap items-center gap-1">
@@ -524,113 +513,181 @@ export function SimulatorPage() {
                 <span>Survol = formule</span>
               </div>
 
-              {/* 4 colonnes : Gains | Retenues | Taux | Compteurs */}
-              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                {/* Colonne 1: Gains */}
-                <div className="rounded-lg border border-green-200 bg-green-50/30">
-                  <h4 className="rounded-t bg-green-100/60 px-2 py-1 text-[10px] font-bold text-green-800 border-b border-green-200">
-                    GAINS ({gains.length})
-                  </h4>
-                  <div className="max-h-64 overflow-y-auto">
-                    <table className="w-full text-[10px]">
-                      <tbody>
-                        {gains.map(l => (
-                          <tr key={l.code} className={`border-b border-green-50 ${l.is_input ? "bg-blue-50/40" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
-                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
-                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">
+              {/* Tableau segmenté par nature — de haut en bas */}
+              {segments && (
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="text-gray-400 text-[9px] border-b border-gray-200">
+                      <th className="px-2 py-1 text-left font-normal w-10">Code</th>
+                      <th className="px-2 py-1 text-left font-normal">Libellé</th>
+                      <th className="px-2 py-1 text-right font-normal w-24">Montant</th>
+                      <th className="px-2 py-1 text-center font-normal w-12">Nature</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* === SEGMENT 1 : GAINS COTISABLES === */}
+                    {segments.gainsCotisables.length > 0 && (
+                      <>
+                        <tr className="bg-blue-50 border-y border-blue-200">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-blue-800">
+                            ① GAINS SOUMIS À COTISATION CNAS ({segments.gainsCotisables.length})
+                          </td>
+                        </tr>
+                        {segments.gainsCotisables.map(l => (
+                          <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-2 py-0.5 font-mono text-gray-400">{l.code}</td>
+                            <td className="px-2 py-0.5 text-gray-700">
                               {l.libelle}
-                              {l.is_input && <span className="ml-0.5 text-[8px] text-blue-500">✎</span>}
+                              {l.is_input && <span className="ml-1 text-[8px] text-blue-500">✎</span>}
                             </td>
-                            <td className="px-1 py-0.5 text-right font-medium text-gray-900 whitespace-nowrap">{formatCurrency(l.amount)}</td>
+                            <td className="px-2 py-0.5 text-right font-medium text-gray-900">{formatCurrency(l.amount)}</td>
+                            <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-blue-500" title="Cotisable + Imposable" /></td>
                           </tr>
                         ))}
-                        {gains.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucun gain</td></tr>}
-                      </tbody>
-                    </table>
-                  </div>
-                  {gains.length > 0 && (
-                    <div className="border-t border-green-200 px-2 py-1 text-[10px] font-bold text-green-800 text-right">
-                      {formatCurrency(gains.reduce((s, l) => s + l.amount, 0))}
-                    </div>
-                  )}
-                </div>
+                        <tr className="bg-blue-100/50 border-b border-blue-200">
+                          <td colSpan={2} className="px-2 py-1 text-[10px] font-bold text-blue-900 text-right">SOUS-TOTAL COTISABLE →</td>
+                          <td className="px-2 py-1 text-right font-bold text-blue-900">{formatCurrency(segments.gainsCotisables.reduce((s, l) => s + l.amount, 0))}</td>
+                          <td></td>
+                        </tr>
+                      </>
+                    )}
 
-                {/* Colonne 2: Retenues */}
-                <div className="rounded-lg border border-red-200 bg-red-50/30">
-                  <h4 className="rounded-t bg-red-100/60 px-2 py-1 text-[10px] font-bold text-red-800 border-b border-red-200">
-                    RETENUES ({retenues.length})
-                  </h4>
-                  <div className="max-h-64 overflow-y-auto">
-                    <table className="w-full text-[10px]">
-                      <tbody>
-                        {retenues.map(l => (
-                          <tr key={l.code} className={`border-b border-red-50 ${l.is_input ? "bg-blue-50/40" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
-                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
-                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">
+                    {/* === SEGMENT 2 : COTISATION CNAS 9% === */}
+                    {segments.cnas && (
+                      <>
+                        <tr className="bg-red-50 border-y border-red-200">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-red-800">
+                            ② COTISATION CNAS 9% (sécurité sociale salarié)
+                          </td>
+                        </tr>
+                        <tr className="border-b border-red-50" title={segments.cnas.formule || ""}>
+                          <td className="px-2 py-0.5 font-mono text-gray-400">{segments.cnas.code}</td>
+                          <td className="px-2 py-0.5 text-gray-700">{segments.cnas.libelle}</td>
+                          <td className="px-2 py-0.5 text-right font-medium text-red-600">-{formatCurrency(Math.abs(segments.cnas.amount))}</td>
+                          <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-red-500" title="Retenue CNAS" /></td>
+                        </tr>
+                      </>
+                    )}
+
+                    {/* === SEGMENT 3 : GAINS IMPOSABLES NON COTISABLES === */}
+                    {segments.gainsImpNonCot.length > 0 && (
+                      <>
+                        <tr className="bg-amber-50 border-y border-amber-200">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-amber-800">
+                            ③ GAINS IMPOSABLES NON COTISABLES ({segments.gainsImpNonCot.length})
+                          </td>
+                        </tr>
+                        {segments.gainsImpNonCot.map(l => (
+                          <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-2 py-0.5 font-mono text-gray-400">{l.code}</td>
+                            <td className="px-2 py-0.5 text-gray-700">
                               {l.libelle}
-                              {l.is_input && <span className="ml-0.5 text-[8px] text-blue-500">✎</span>}
+                              {l.is_input && <span className="ml-1 text-[8px] text-blue-500">✎</span>}
                             </td>
-                            <td className="px-1 py-0.5 text-right font-medium text-red-600 whitespace-nowrap">{formatCurrency(Math.abs(l.amount))}</td>
+                            <td className="px-2 py-0.5 text-right font-medium text-gray-900">{formatCurrency(l.amount)}</td>
+                            <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-amber-500" title="Imposable seulement" /></td>
                           </tr>
                         ))}
-                        {retenues.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucune retenue</td></tr>}
-                      </tbody>
-                    </table>
-                  </div>
-                  {retenues.length > 0 && (
-                    <div className="border-t border-red-200 px-2 py-1 text-[10px] font-bold text-red-800 text-right">
-                      {formatCurrency(retenues.reduce((s, l) => s + Math.abs(l.amount), 0))}
-                    </div>
-                  )}
-                </div>
+                        <tr className="bg-amber-100/50 border-b border-amber-200">
+                          <td colSpan={2} className="px-2 py-1 text-[10px] font-bold text-amber-900 text-right">SOUS-TOTAL IMPOSABLE NON COT →</td>
+                          <td className="px-2 py-1 text-right font-bold text-amber-900">{formatCurrency(segments.gainsImpNonCot.reduce((s, l) => s + l.amount, 0))}</td>
+                          <td></td>
+                        </tr>
+                      </>
+                    )}
 
-                {/* Colonne 3: Taux & Paramètres */}
-                <div className="rounded-lg border border-amber-200 bg-amber-50/30">
-                  <h4 className="rounded-t bg-amber-100/60 px-2 py-1 text-[10px] font-bold text-amber-800 border-b border-amber-200">
-                    TAUX ({taux.length})
-                  </h4>
-                  <div className="max-h-64 overflow-y-auto">
-                    <table className="w-full text-[10px]">
-                      <tbody>
-                        {taux.map(l => (
-                          <tr key={l.code} className="border-b border-amber-50" title={l.formule || ""}>
-                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
-                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">{l.libelle}</td>
-                            <td className="px-1 py-0.5 text-right font-medium text-amber-700 whitespace-nowrap">
-                              {Number.isInteger(l.amount) ? l.amount : l.amount.toFixed(2)}
-                            </td>
-                          </tr>
-                        ))}
-                        {taux.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucun taux</td></tr>}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                    {/* === SOUS-TOTAL : BASE IMPOSABLE === */}
+                    <tr className="bg-gray-100 border-y-2 border-gray-300">
+                      <td colSpan={2} className="px-2 py-1.5 text-[10px] font-bold text-gray-900 text-right">BASE IMPOSABLE (T[43]) →</td>
+                      <td className="px-2 py-1.5 text-right font-bold text-gray-900">{formatCurrency(segments.baseImposable)}</td>
+                      <td></td>
+                    </tr>
 
-                {/* Colonne 4: Compteurs & Infos */}
-                <div className="rounded-lg border border-blue-200 bg-blue-50/30">
-                  <h4 className="rounded-t bg-blue-100/60 px-2 py-1 text-[10px] font-bold text-blue-800 border-b border-blue-200">
-                    COMPTEURS ({compteurs.length})
-                  </h4>
-                  <div className="max-h-64 overflow-y-auto">
-                    <table className="w-full text-[10px]">
-                      <tbody>
-                        {compteurs.map(l => (
-                          <tr key={l.code} className={`border-b border-blue-50 ${l.is_input ? "bg-blue-100/40" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
-                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
-                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">
+                    {/* === SEGMENT 4 : RETENUE IRG === */}
+                    {segments.irg && (
+                      <>
+                        <tr className="bg-red-50 border-y border-red-200">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-red-800">
+                            ④ RETENUE IRG (impôt sur le revenu — barème)
+                          </td>
+                        </tr>
+                        <tr className="border-b border-red-50" title={segments.irg.formule || ""}>
+                          <td className="px-2 py-0.5 font-mono text-gray-400">{segments.irg.code}</td>
+                          <td className="px-2 py-0.5 text-gray-700">{segments.irg.libelle}</td>
+                          <td className="px-2 py-0.5 text-right font-medium text-red-600">-{formatCurrency(Math.abs(segments.irg.amount))}</td>
+                          <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-red-600" title="Retenue IRG" /></td>
+                        </tr>
+                      </>
+                    )}
+
+                    {/* === SEGMENT 5 : GAINS EXONÉRÉS === */}
+                    {segments.gainsExoneres.length > 0 && (
+                      <>
+                        <tr className="bg-green-50 border-y border-green-200">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-green-800">
+                            ⑤ GAINS NON COTISABLES NON IMPOSABLES ({segments.gainsExoneres.length})
+                          </td>
+                        </tr>
+                        {segments.gainsExoneres.map(l => (
+                          <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-2 py-0.5 font-mono text-gray-400">{l.code}</td>
+                            <td className="px-2 py-0.5 text-gray-700">
                               {l.libelle}
-                              {l.is_input && <span className="ml-0.5 text-[8px] text-blue-500">✎</span>}
+                              {l.is_input && <span className="ml-1 text-[8px] text-blue-500">✎</span>}
                             </td>
-                            <td className="px-1 py-0.5 text-right font-medium text-gray-900 whitespace-nowrap">{formatCurrency(l.amount)}</td>
+                            <td className="px-2 py-0.5 text-right font-medium text-gray-900">{formatCurrency(l.amount)}</td>
+                            <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Exonéré" /></td>
                           </tr>
                         ))}
-                        {compteurs.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucun compteur</td></tr>}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
+                        <tr className="bg-green-100/50 border-b border-green-200">
+                          <td colSpan={2} className="px-2 py-1 text-[10px] font-bold text-green-900 text-right">SOUS-TOTAL EXONÉRÉ →</td>
+                          <td className="px-2 py-1 text-right font-bold text-green-900">{formatCurrency(segments.gainsExoneres.reduce((s, l) => s + l.amount, 0))}</td>
+                          <td></td>
+                        </tr>
+                      </>
+                    )}
+
+                    {/* === SEGMENT 6 : RETENUES DIVERSES === */}
+                    {segments.retenuesDiverses.filter(l => l.code !== "510" && l.code !== "660").length > 0 && (
+                      <>
+                        <tr className="bg-orange-50 border-y border-orange-200">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-orange-800">
+                            ⑥ AUTRES RETENUES (acomptes, prêts, etc.)
+                          </td>
+                        </tr>
+                        {segments.retenuesDiverses.filter(l => l.code !== "510" && l.code !== "660").map(l => (
+                          <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-2 py-0.5 font-mono text-gray-400">{l.code}</td>
+                            <td className="px-2 py-0.5 text-gray-700">
+                              {l.libelle}
+                              {l.is_input && <span className="ml-1 text-[8px] text-blue-500">✎</span>}
+                            </td>
+                            <td className="px-2 py-0.5 text-right font-medium text-red-600">-{formatCurrency(Math.abs(l.amount))}</td>
+                            <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-orange-500" title="Retenue diverse" /></td>
+                          </tr>
+                        ))}
+                      </>
+                    )}
+
+                    {/* === TOTAUX FINAUX === */}
+                    <tr className="bg-gray-100 border-y-2 border-gray-300">
+                      <td colSpan={2} className="px-2 py-1.5 text-[10px] font-bold text-gray-900 text-right">TOTAL GAINS (T[03]) →</td>
+                      <td className="px-2 py-1.5 text-right font-bold text-gray-900">{formatCurrency(segments.totalBrut)}</td>
+                      <td></td>
+                    </tr>
+                    <tr className="bg-gray-100 border-b border-gray-300">
+                      <td colSpan={2} className="px-2 py-1.5 text-[10px] font-bold text-gray-900 text-right">TOTAL RETENUES (T[04]) →</td>
+                      <td className="px-2 py-1.5 text-right font-bold text-red-600">-{formatCurrency(segments.totalRetenues)}</td>
+                      <td></td>
+                    </tr>
+                    <tr className="bg-green-100 border-y-2 border-green-600">
+                      <td colSpan={2} className="px-2 py-2 text-sm font-bold text-green-900 text-right">NET À PAYER →</td>
+                      <td className="px-2 py-2 text-right text-base font-bold text-green-700">{formatCurrency(segments.netPayer)}</td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              )}
 
               {/* Sections collapsibles */}
               <div className="mt-3 space-y-2">
