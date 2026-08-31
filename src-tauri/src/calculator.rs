@@ -883,9 +883,11 @@ pub fn calculate_salary(
 
     // Pre-compute leave/absence days for is_absence_dependent bonus prorata
     let calendar_working_days = compute_working_days(period);
-    let r033_input = effective_inputs.get("033").map(|(m, _)| *m).unwrap_or(0.0);
-    let r089_input = effective_inputs.get("089").map(|(m, _)| *m).unwrap_or(0.0);
-    let r099_input = effective_inputs.get("099").map(|(m, _)| *m).unwrap_or(0.0);
+    // R033/R089/R099 are classe=3 (Nombre): the user-entered value is stored in N (nombre),
+    // not M (montant). Read N first, fall back to M for backward compatibility.
+    let r033_input = effective_inputs.get("033").map(|(m, n)| if *n != 0.0 { *n } else { *m }).unwrap_or(0.0);
+    let r089_input = effective_inputs.get("089").map(|(m, n)| if *n != 0.0 { *n } else { *m }).unwrap_or(0.0);
+    let r099_input = effective_inputs.get("099").map(|(m, n)| if *n != 0.0 { *n } else { *m }).unwrap_or(0.0);
     let (conge_days, sick_days) = compute_leave_days(conn, employee_id, period);
     let r099_pre = if r099_input != 0.0 { r099_input } else { conge_days };
     let r089_pre = if r089_input != 0.0 { r089_input } else { sick_days };
@@ -1243,8 +1245,14 @@ pub fn calculate_salary(
         let has_formula = rub.formule.as_ref().map_or(false, |f| !f.trim().is_empty());
         let is_manual = !rub.calcul || !has_formula;
         if is_emp_specific || is_manual {
-            if let Some(&(m_val, _)) = input_values.get(code) {
-                r_values.insert(code.clone(), m_val);
+            if let Some(&(m_val, n_val)) = input_values.get(code) {
+                // For classe 3 (Nombre), 4, 7 (Compteur): user enters value as N (nombre).
+                // For classe 1 (Gain), 2 (Retenue), 5 (Taux): user enters value as M (montant).
+                let val = match rub.classe as i64 {
+                    3 | 4 | 7 => if n_val != 0.0 { n_val } else { m_val },
+                    _ => m_val,
+                };
+                r_values.insert(code.clone(), val);
             } else if is_manual && rub.classe != 7.0 {
                 r_values.insert(code.clone(), 0.0);
             }
@@ -1322,7 +1330,11 @@ pub fn calculate_salary(
         // otherwise fall back to pre-loaded history value. Skip formula evaluation.
         if is_manual || is_emp_specific {
             let amount = if has_input {
-                m_val
+                // Classe 3 (Nombre), 4, 7 (Compteur): value is in N. Others: value is in M.
+                match rub.classe as i64 {
+                    3 | 4 | 7 => if n_val != 0.0 { n_val } else { m_val },
+                    _ => m_val,
+                }
             } else {
                 *r_values.get(code).unwrap_or(&0.0)
             };
