@@ -602,19 +602,53 @@ export function SimulatorPage() {
                           </tr>
                         ))}
                         <tr className="bg-blue-100/50 border-b border-blue-200">
-                          <td colSpan={2} className="px-2 py-1 text-[10px] font-bold text-blue-900 text-right">SOUS-TOTAL COTISABLE →</td>
+                          <td colSpan={2} className="px-2 py-1 text-[10px] font-bold text-blue-900 text-right">SOUS-TOTAL GAINS COTISABLES →</td>
                           <td className="px-2 py-1 text-right font-bold text-blue-900">{formatCurrency(segments.gainsCotisables.reduce((s, l) => s + l.amount, 0))}</td>
                           <td></td>
                         </tr>
                       </>
                     )}
 
-                    {/* === SEGMENT 2 : COTISATION CNAS 9% === */}
+                    {/* === SEGMENT 2 : RETENUES COTISABLES (absences, congés...) === */}
+                    {segments.retenuesCotisables.length > 0 && (
+                      <>
+                        <tr className="bg-blue-50 border-y border-blue-300">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-blue-800">
+                            ② RETENUES COTISABLES ({segments.retenuesCotisables.length}) — absences, congés, heures
+                          </td>
+                        </tr>
+                        {segments.retenuesCotisables.map(l => (
+                          <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-2 py-0.5 font-mono text-gray-400">{l.code}</td>
+                            <td className="px-2 py-0.5 text-gray-700">
+                              {l.libelle}
+                              {l.is_input && <span className="ml-1 text-[8px] text-blue-500">✎</span>}
+                            </td>
+                            <td className="px-2 py-0.5 text-right font-medium text-red-600">-{formatCurrency(Math.abs(l.amount))}</td>
+                            <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-blue-400" title="Retenue cotisable" /></td>
+                          </tr>
+                        ))}
+                        <tr className="bg-blue-100/30 border-b border-blue-200">
+                          <td colSpan={2} className="px-2 py-1 text-[10px] font-bold text-blue-800 text-right">SOUS-TOTAL RETENUES COTISABLES →</td>
+                          <td className="px-2 py-1 text-right font-bold text-red-600">-{formatCurrency(segments.retenuesCotisables.reduce((s, l) => s + Math.abs(l.amount), 0))}</td>
+                          <td></td>
+                        </tr>
+                      </>
+                    )}
+
+                    {/* === SOUS-TOTAL : BASE COTISABLE NETTE === */}
+                    <tr className="bg-gray-100 border-y-2 border-gray-300">
+                      <td colSpan={2} className="px-2 py-1.5 text-[10px] font-bold text-gray-900 text-right">BASE COTISABLE (T[01]) →</td>
+                      <td className="px-2 py-1.5 text-right font-bold text-gray-900">{formatCurrency(segments.baseCotisable)}</td>
+                      <td></td>
+                    </tr>
+
+                    {/* === SEGMENT 3 : COTISATION CNAS 9% === */}
                     {segments.cnas && (
                       <>
                         <tr className="bg-red-50 border-y border-red-200">
                           <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-red-800">
-                            ② COTISATION CNAS 9% (sécurité sociale salarié)
+                            ③ COTISATION CNAS 9% (sécurité sociale salarié)
                           </td>
                         </tr>
                         <tr className="border-b border-red-50" title={segments.cnas.formule || ""}>
@@ -626,12 +660,12 @@ export function SimulatorPage() {
                       </>
                     )}
 
-                    {/* === SEGMENT 3 : GAINS IMPOSABLES NON COTISABLES === */}
+                    {/* === SEGMENT 4 : GAINS IMPOSABLES NON COTISABLES === */}
                     {segments.gainsImpNonCot.length > 0 && (
                       <>
                         <tr className="bg-amber-50 border-y border-amber-200">
                           <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-amber-800">
-                            ③ GAINS IMPOSABLES NON COTISABLES ({segments.gainsImpNonCot.length})
+                            ④ GAINS IMPOSABLES NON COTISABLES ({segments.gainsImpNonCot.length}) — panier, transport
                           </td>
                         </tr>
                         {segments.gainsImpNonCot.map(l => (
@@ -653,6 +687,33 @@ export function SimulatorPage() {
                       </>
                     )}
 
+                    {/* === SEGMENT 5 : RETENUES IMPOSABLES NON COTISABLES === */}
+                    {segments.retenuesImpNonCot.length > 0 && (
+                      <>
+                        <tr className="bg-amber-50 border-y border-amber-300">
+                          <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-amber-800">
+                            ⑤ RETENUES IMPOSABLES NON COTISABLES ({segments.retenuesImpNonCot.length}) — mutuelle, intempéries
+                          </td>
+                        </tr>
+                        {segments.retenuesImpNonCot.map(l => (
+                          <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-2 py-0.5 font-mono text-gray-400">{l.code}</td>
+                            <td className="px-2 py-0.5 text-gray-700">
+                              {l.libelle}
+                              {l.is_input && <span className="ml-1 text-[8px] text-blue-500">✎</span>}
+                            </td>
+                            <td className="px-2 py-0.5 text-right font-medium text-red-600">-{formatCurrency(Math.abs(l.amount))}</td>
+                            <td className="px-2 py-0.5 text-center"><span className="inline-block h-2 w-2 rounded-full bg-amber-400" title="Retenue imposable non cotisable" /></td>
+                          </tr>
+                        ))}
+                        <tr className="bg-amber-100/30 border-b border-amber-200">
+                          <td colSpan={2} className="px-2 py-1 text-[10px] font-bold text-amber-800 text-right">SOUS-TOTAL RETENUES IMP. NON COT →</td>
+                          <td className="px-2 py-1 text-right font-bold text-red-600">-{formatCurrency(segments.retenuesImpNonCot.reduce((s, l) => s + Math.abs(l.amount), 0))}</td>
+                          <td></td>
+                        </tr>
+                      </>
+                    )}
+
                     {/* === SOUS-TOTAL : BASE IMPOSABLE === */}
                     <tr className="bg-gray-100 border-y-2 border-gray-300">
                       <td colSpan={2} className="px-2 py-1.5 text-[10px] font-bold text-gray-900 text-right">BASE IMPOSABLE (T[43]) →</td>
@@ -660,12 +721,12 @@ export function SimulatorPage() {
                       <td></td>
                     </tr>
 
-                    {/* === SEGMENT 4 : RETENUE IRG === */}
+                    {/* === SEGMENT 6 : RETENUE IRG === */}
                     {segments.irg && (
                       <>
                         <tr className="bg-red-50 border-y border-red-200">
                           <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-red-800">
-                            ④ RETENUE IRG (impôt sur le revenu — barème)
+                            ⑥ RETENUE IRG (impôt sur le revenu — barème)
                           </td>
                         </tr>
                         <tr className="border-b border-red-50" title={segments.irg.formule || ""}>
@@ -677,12 +738,12 @@ export function SimulatorPage() {
                       </>
                     )}
 
-                    {/* === SEGMENT 5 : GAINS EXONÉRÉS === */}
+                    {/* === SEGMENT 7 : GAINS EXONÉRÉS === */}
                     {segments.gainsExoneres.length > 0 && (
                       <>
                         <tr className="bg-green-50 border-y border-green-200">
                           <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-green-800">
-                            ⑤ GAINS NON COTISABLES NON IMPOSABLES ({segments.gainsExoneres.length})
+                            ⑦ GAINS NON COTISABLES NON IMPOSABLES ({segments.gainsExoneres.length}) — alloc. familiale, frais
                           </td>
                         </tr>
                         {segments.gainsExoneres.map(l => (
@@ -704,12 +765,12 @@ export function SimulatorPage() {
                       </>
                     )}
 
-                    {/* === SEGMENT 6 : RETENUES DIVERSES === */}
+                    {/* === SEGMENT 8 : RETENUES DIVERSES === */}
                     {segments.retenuesDiverses.filter(l => l.code !== "510" && l.code !== "660").length > 0 && (
                       <>
                         <tr className="bg-orange-50 border-y border-orange-200">
                           <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-orange-800">
-                            ⑥ AUTRES RETENUES (acomptes, prêts, etc.)
+                            ⑧ AUTRES RETENUES (acomptes, prêts, etc.)
                           </td>
                         </tr>
                         {segments.retenuesDiverses.filter(l => l.code !== "510" && l.code !== "660").map(l => (
