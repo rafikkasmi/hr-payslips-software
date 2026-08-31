@@ -19,6 +19,7 @@ pub struct RubriqueDef {
     pub init_val: f64,
     pub ord_clc: f64,
     pub manuelle: bool,
+    pub calcul: bool,
     pub cd_nb_base: Option<String>,
     pub cd_taux: Option<String>,
 }
@@ -97,7 +98,7 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
                is_total, is_imp, is_init, is_regular, is_locked, init_val, ord_clc, manuelle,
-               cd_nb_base, cd_taux
+               cd_nb_base, cd_taux, calcul
                FROM rubriques ORDER BY ord_clc"#,
         )
         .map_err(|e| e.to_string())?;
@@ -122,6 +123,7 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
                 manuelle: row.get::<_, Option<i64>>(14)?.unwrap_or(0) != 0,
                 cd_nb_base: row.get::<_, Option<String>>(15)?,
                 cd_taux: row.get::<_, Option<String>>(16)?,
+                calcul: row.get::<_, Option<i64>>(17)?.unwrap_or(0) != 0,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -841,7 +843,7 @@ pub fn calculate_salary(
                             // Only load if this is a manual or employee-specific rubrique
                             let is_emp = emp_codes.contains(&code);
                             let is_manual = rub_defs.iter().find(|r| r.code == code)
-                                .map(|r| r.manuelle || r.formule.as_ref().map_or(true, |f| f.trim().is_empty()))
+                                .map(|r| !r.calcul || r.formule.as_ref().map_or(true, |f| f.trim().is_empty()))
                                 .unwrap_or(true);
                             if is_emp || is_manual {
                                 effective_inputs.insert(code, (val, 0.0));
@@ -1235,7 +1237,7 @@ pub fn calculate_salary(
         let code = &rub.code;
         let is_emp_specific = emp_rub_codes.contains(code);
         let has_formula = rub.formule.as_ref().map_or(false, |f| !f.trim().is_empty());
-        let is_manual = rub.manuelle || !has_formula;
+        let is_manual = !rub.calcul || !has_formula;
         if is_emp_specific || is_manual {
             if let Some(&(m_val, _)) = input_values.get(code) {
                 r_values.insert(code.clone(), m_val);
@@ -1303,7 +1305,7 @@ pub fn calculate_salary(
         }
 
         // Check if this rubrique has an explicit input value
-        let is_manual = rub.manuelle || rub.formule.as_ref().map_or(true, |f| f.trim().is_empty());
+        let is_manual = !rub.calcul || rub.formule.as_ref().map_or(true, |f| f.trim().is_empty());
         let is_emp_specific = emp_rub_codes.contains(code);
         let has_input = input_values.contains_key(code);
 
