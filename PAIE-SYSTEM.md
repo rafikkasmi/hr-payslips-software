@@ -22,7 +22,8 @@
 11. [Nouvelles rubriques 2025 (R960-R982)](#11-nouvelles-rubriques-2025-r960-r982)
 12. [Masse salariale et cotisations employeur](#12-masse-salariale-et-cotisations-employeur)
 13. [Paramètres globaux configurables](#13-paramètres-globaux-configurables)
-14. [Catalogue complet des rubriques actives](#14-catalogue-complet-des-rubriques-actives)
+14. [Affichage segmenté du Résultat (simulateur)](#14-affichage-segmenté-du-résultat-simulateur)
+15. [Catalogue complet des rubriques actives](#15-catalogue-complet-des-rubriques-actives)
 
 ---
 
@@ -93,19 +94,63 @@ Quand une rubrique est saisie manuellement (pas de formule), l'utilisateur fourn
 - **M** = Montant (valeur monétaire)
 - **N** = Nombre (quantité : jours, heures, nombre de paniers...)
 
+### Règle critique : M vs N selon la classe
+
+Le simulateur frontend stocke la valeur saisie dans **un seul champ** selon la classe de la rubrique.
+Le calculateur Rust doit lire le **bon champ** pour que la valeur soit transmise à la formule :
+
+| Classe | Champ utilisé | Badge UI | Exemples |
+|--------|--------------|----------|----------|
+| **1** (Gain) | **M** (montant) | M (bleu) | R100, R291, R327, R330, R522 |
+| **2** (Retenue) | **M** (montant) | M (bleu) | R720, R740 |
+| **3** (Nombre) | **N** (nombre) | N (ambre) | R033, R060, R065, R089, R110, R120 |
+| **4** (Compteur) | **N** (nombre) | N (ambre) | R099 |
+| **5** (Taux) | **M** (montant) | T (violet) | R260, R270, R280, R300, R310 |
+| **7** (Paramètre) | **N** (nombre) | N (ambre) | R520, R695, R696, R975, R979 |
+
+**Logique dans `calculator.rs`** (3 points de lecture) :
+```rust
+let val = match rub.classe as i64 {
+    3 | 4 | 7 => if n_val != 0.0 { n_val } else { m_val },  // N prioritaire
+    _ => m_val,                                             // M par défaut
+};
+```
+
+**Exemple concret** :
+```
+R033 (classe=3, Nombre) → utilisateur tape 2 → inputValues["033"] = [M=0, N=2]
+Calculateur lit N=2 (pas M=0)
+R034 = R[033] × R[010] = 2 × taux journalier = montant de la retenue absence
+```
+
+### Champ `calcul` — Détermine si une rubrique est calculée ou manuelle
+
+PCPAIE utilise le champ `calcul` (booléen) pour décider si une rubrique doit être calculée par formule ou saisie manuelle :
+
+```rust
+let is_manual = !rub.calcul || !has_formula;
+```
+
+- `calcul=1` + formule présente → **calculée automatiquement** (R005, R010, R030, R034, R500, R510, R660...)
+- `calcul=0` → **manuelle** (saisie utilisateur) (R033, R060, R065, R100, R290, R520...)
+- `calcul=1` + pas de formule → **manuelle** (cas rare)
+
+**Ancien bug corrigé** : le calculateur utilisait `manuelle || !has_formula` au lieu de `!calcul`.
+Cela causait un double-comptage des retenues (R510/R660 calculées ET R960-R974 aussi).
+
 ---
 
 ## 3. Les 7 classes de rubriques
 
-| Classe | Rôle | Affichage bulletin | Exemples |
-|--------|------|---------------------|----------|
-| **0** | Information / Calcul interne | Non affichée | R050 (rejet), R620, R800 (cotis. congés payés) |
-| **1** | Gains (ajoutés au brut) | Section "Gains" | R030 (salaire base), R291 (responsabilité), R100 (congé) |
-| **2** | Retenues (déduites du net) | Section "Retenues" | R034 (absence), R510 (CNAS), R660 (IRG) |
-| **3** | Nombre / Compteur d'absence | Non affichée | R033 (jours absence), R089 (jours maladie) |
-| **4** | Compteur de congé | Non affichée | R099 (jours de congé) |
-| **5** | Taux / Coefficient | Non affichée | R200 (prorata), R505 (taux CNAS 9%), R655 (prorata IRG) |
-| **7** | Paramètre de référence | Non affichée | R001 (salaire base), R010 (taux journalier), R500 (cotisable) |
+| Classe | Rôle | Affichage bulletin | Champ input | Exemples |
+|--------|------|---------------------|-------------|----------|
+| **0** | Information / Calcul interne | Non affichée | — | R050 (rejet), R800 (cotis. congés payés) |
+| **1** | Gains (ajoutés au brut) | Section "Gains" | **M** | R030, R291, R100, R522, R327 |
+| **2** | Retenues (déduites du net) | Section "Retenues" | **M** | R034, R510, R660, R720, R740 |
+| **3** | Nombre / Compteur d'absence | Non affichée | **N** | R033, R060, R065, R089, R110, R120 |
+| **4** | Compteur de congé | Non affichée | **N** | R099 |
+| **5** | Taux / Coefficient | Non affichée | **M** | R200, R505, R655, R260, R270 |
+| **7** | Paramètre de référence | Non affichée | **N** | R001, R010, R500, R520, R975 |
 
 ### Règles par classe
 
@@ -113,6 +158,7 @@ Quand une rubrique est saisie manuellement (pas de formule), l'utilisateur fourn
 - **Classe 2 (Retenues)** : montant soustrait → ajouté à T[04] (total retenues), soustrait de T[52] si `is_brut=1`
 - **Classe 7 (Paramètres)** : valeurs de référence, n'alimentent **pas** les T[] directement
 - **Classe 5 (Taux)** : coefficients utilisés par d'autres rubriques, n'alimentent pas les T[]
+- **Classe 3/4 (Nombres)** : quantités saisies en N, utilisées par les formules de retenues (R034=R[033]×R[010])
 
 ---
 
@@ -980,7 +1026,64 @@ Ces paramètres surchargent les variables T[] au démarrage du calcul :
 
 ---
 
-## 14. Catalogue complet des rubriques actives
+## 14. Affichage segmenté du Résultat (simulateur)
+
+Le panneau Résultat affiche les rubriques calculées en 8 segments verticaux, du haut vers le bas,
+reproduisant la structure d'un bulletin de paie algérien :
+
+### Structure des 8 segments
+
+| # | Segment | Couleur | Critère SQL | Exemples |
+|---|---------|---------|-------------|----------|
+| ① | Gains cotisables | bleu | classe=1, is_secu_s=1, amount>0 | R030, R112, R291, R318, R522 |
+| ② | Retenues cotisables | bleu | classe=2, is_secu_s=1 | R034, R061, R066, R090 |
+| — | **BASE COTISABLE (T[01])** | gris | T[01] = gains cotisables − retenues cotisables | |
+| ③ | CNAS 9% | rouge | code="510" | R510 = R[500]×9/100 |
+| ④ | Gains imposables non cotisables | ambre | classe=1, is_secu_s=0, is_impos=1 | R522 (panier), R532 (transport) |
+| ⑤ | Retenues imposables non cotisables | ambre | classe=2, is_secu_s=0, is_impos=1 | R504 (intempéries), R515 (mutuelle) |
+| — | **BASE IMPOSABLE (T[43])** | gris | T[43] = imposable brut − cotisations | |
+| ⑥ | IRG | rouge | code="660" | R660 = IRG(R[652], R[655]) |
+| ⑦ | Gains exonérés | vert | classe=1, is_secu_s=0, is_impos=0 | R699, R700 (alloc. familiale) |
+| ⑧ | Autres retenues | orange | classe=2, is_secu_s=0, is_impos=0 | R720 (acompte), R740 (remb. prêt) |
+| — | **TOTAL GAINS / RETENUES / NET À PAYER** | | | |
+
+### Logique de filtrage (SimulatorPage.tsx)
+
+```typescript
+const gainsCotisables = lines.filter(l => l.classe === 1 && l.amount > 0 && l.is_secu_s);
+const retenuesCotisables = lines.filter(l => l.classe === 2 && l.is_secu_s);
+const gainsImpNonCot = lines.filter(l => l.classe === 1 && l.amount > 0 && !l.is_secu_s && l.is_impos);
+const retenuesImpNonCot = lines.filter(l => l.classe === 2 && !l.is_secu_s && l.is_impos);
+const gainsExoneres = lines.filter(l => l.classe === 1 && l.amount > 0 && !l.is_secu_s && !l.is_impos);
+const retenuesDiverses = lines.filter(l => l.classe === 2 && !l.is_secu_s && !l.is_impos);
+```
+
+### Rubriques intermédiaires calculées
+
+Les rubriques **intermédiaires** (classe 3/4/7 avec `calcul=0`) sont des **paramètres de saisie**.
+Les rubriques **calculées** (classe 1/2 avec `calcul=1` et formule) utilisent ces paramètres :
+
+```
+Saisie : R033 = 2 (jours d'absence)           → classe=3, calcul=0, stocké en N
+Calculé : R034 = R[033] × R[010]              → classe=2, calcul=1, formule
+         = 2 × taux journalier
+         = montant de la retenue (affiché en segment ②)
+
+Saisie : R065 = 1 (heure d'absence)           → classe=3, calcul=0, stocké en N
+Calculé : R066 = R[065] × R[005]              → classe=2, calcul=1, formule
+         = 1 × taux horaire
+         = montant de la retenue (affiché en segment ②)
+
+Saisie : R110 = 20 (heures supp 50%)          → classe=3, calcul=0, stocké en N
+Calculé : R111 = R[005] × 1.5                 → classe=5, calcul=1, taux
+         R112 = R[110] × R[111]               → classe=1, calcul=1, gain
+         = 20 × taux horaire × 1.5
+         = montant du gain (affiché en segment ①)
+```
+
+---
+
+## 15. Catalogue complet des rubriques actives
 
 ### Rubriques avec formule (75 rubriques actives sur 999)
 
