@@ -53,32 +53,32 @@ export function SimulatorPage() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Column widths (percentages)
-  const [colWidths, setColWidths] = useState({ catalog: 25, sim: 30, result: 45 });
-  const dragRef = useRef<{ which: "catalog" | "sim"; startX: number; startWidths: typeof colWidths } | null>(null);
+  // Row heights (percentages) for horizontal stacked layout
+  const [rowHeights, setRowHeights] = useState({ catalog: 20, sim: 25, result: 55 });
+  const dragRef = useRef<{ which: "catalog" | "sim"; startY: number; startHeights: typeof rowHeights } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const startDrag = (which: "catalog" | "sim", e: React.MouseEvent) => {
     e.preventDefault();
-    dragRef.current = { which, startX: e.clientX, startWidths: { ...colWidths } };
-    document.body.style.cursor = "col-resize";
+    dragRef.current = { which, startY: e.clientY, startHeights: { ...rowHeights } };
+    document.body.style.cursor = "row-resize";
     document.body.style.userSelect = "none";
   };
 
   useEffect(() => {
     const handleMove = (e: MouseEvent) => {
       if (!dragRef.current || !containerRef.current) return;
-      const containerWidth = containerRef.current.offsetWidth;
-      const delta = ((e.clientX - dragRef.current.startX) / containerWidth) * 100;
-      const { which, startWidths } = dragRef.current;
+      const containerHeight = containerRef.current.offsetHeight;
+      const delta = ((e.clientY - dragRef.current.startY) / containerHeight) * 100;
+      const { which, startHeights } = dragRef.current;
       if (which === "catalog") {
-        const newCatalog = Math.max(15, Math.min(45, startWidths.catalog + delta));
-        const newSim = startWidths.sim + startWidths.catalog - newCatalog;
-        setColWidths({ catalog: newCatalog, sim: Math.max(15, Math.min(50, newSim)), result: 100 - newCatalog - Math.max(15, Math.min(50, newSim)) });
+        const newCatalog = Math.max(10, Math.min(40, startHeights.catalog + delta));
+        const newSim = startHeights.sim + startHeights.catalog - newCatalog;
+        setRowHeights({ catalog: newCatalog, sim: Math.max(10, Math.min(50, newSim)), result: 100 - newCatalog - Math.max(10, Math.min(50, newSim)) });
       } else {
-        const newSim = Math.max(15, Math.min(50, startWidths.sim + delta));
-        const newResult = startWidths.result + startWidths.sim - newSim;
-        setColWidths({ catalog: colWidths.catalog, sim: newSim, result: Math.max(20, Math.min(60, newResult)) });
+        const newSim = Math.max(10, Math.min(50, startHeights.sim + delta));
+        const newResult = startHeights.result + startHeights.sim - newSim;
+        setRowHeights({ catalog: rowHeights.catalog, sim: newSim, result: Math.max(20, Math.min(70, newResult)) });
       }
     };
     const handleUp = () => {
@@ -92,7 +92,7 @@ export function SimulatorPage() {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
     };
-  }, [colWidths]);
+  }, [rowHeights]);
 
   useEffect(() => {
     (async () => {
@@ -347,13 +347,13 @@ export function SimulatorPage() {
         </div>
       )}
 
-      {/* 3 resizable columns */}
-      <div ref={containerRef} className="flex flex-1 gap-0 overflow-hidden">
-        {/* Col 1: Catalogue */}
-        <div style={{ width: `${colWidths.catalog}%` }} className="flex flex-col overflow-hidden rounded-l-xl border border-gray-200 bg-white">
-          <div className="border-b border-gray-200 px-3 py-2">
-            <h3 className="mb-2 text-sm font-semibold text-gray-700">Catalogue des Rubriques</h3>
-            <div className="flex items-center gap-2">
+      {/* 3 horizontal stacked rows */}
+      <div ref={containerRef} className="flex flex-1 flex-col gap-0 overflow-hidden">
+        {/* Row 1: Catalogue — horizontal band */}
+        <div style={{ height: `${rowHeights.catalog}%` }} className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <div className="flex items-center gap-3 border-b border-gray-200 px-3 py-2">
+            <h3 className="text-sm font-semibold text-gray-700 whitespace-nowrap">Catalogue des Rubriques</h3>
+            <div className="flex items-center gap-2 flex-1 max-w-md">
               <Search className="h-4 w-4 text-gray-400" />
               <input
                 type="text"
@@ -364,53 +364,56 @@ export function SimulatorPage() {
                 autoFocus
               />
             </div>
-            <div className="mt-2 flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1">
               <button onClick={() => setRubFilterClasse("")} className={`rounded px-2 py-0.5 text-xs ${!rubFilterClasse ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>Toutes</button>
               {[0, 1, 2, 3, 5].map(c => (
                 <button key={c} onClick={() => setRubFilterClasse(String(c))} className={`rounded px-2 py-0.5 text-xs ${rubFilterClasse === String(c) ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>{classeLabels[c] || `Cl.${c}`}</button>
               ))}
             </div>
+            <span className="text-[10px] text-gray-400 whitespace-nowrap">{allRubriques.length} rub · {filteredCatalog.length} affichées</span>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          {/* Horizontal scrollable list of rubriques */}
+          <div className="flex-1 overflow-x-auto overflow-y-hidden">
             {filteredCatalog.length === 0 ? (
               <p className="px-3 py-4 text-center text-xs text-gray-400">Aucune rubrique trouvée</p>
             ) : (
-              filteredCatalog.slice(0, 300).map(rub => {
-                const inSim = simCodes.has(rub.code);
-                return (
-                  <button
-                    key={rub.code}
-                    onClick={() => !inSim && addToSim(rub)}
-                    disabled={inSim}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs border-b border-gray-50 ${inSim ? "cursor-default bg-green-50/50 text-gray-400" : "hover:bg-blue-50"}`}
-                  >
-                    <span className="font-mono text-gray-400 w-10">{rub.code}</span>
-                    <span className="flex-1 truncate text-gray-700">{rub.libelle}</span>
-                    <span className="text-gray-300 text-[10px]">cl{rub.classe}</span>
-                    {inSim ? <span className="text-[10px] text-green-600">✓</span> : <ArrowRight className="h-3 w-3 text-gray-300" />}
-                  </button>
-                );
-              })
+              <div className="flex h-full gap-1 px-2 py-1.5">
+                {filteredCatalog.slice(0, 300).map(rub => {
+                  const inSim = simCodes.has(rub.code);
+                  return (
+                    <button
+                      key={rub.code}
+                      onClick={() => !inSim && addToSim(rub)}
+                      disabled={inSim}
+                      className={`flex flex-col items-start gap-0.5 rounded-lg border px-2.5 py-1.5 text-left text-xs whitespace-nowrap min-w-[140px] ${inSim ? "cursor-default border-green-200 bg-green-50/50 text-gray-400" : "border-gray-200 hover:border-blue-400 hover:bg-blue-50"}`}
+                    >
+                      <div className="flex items-center gap-1.5 w-full">
+                        <span className="font-mono text-gray-400">{rub.code}</span>
+                        <span className="text-gray-300 text-[10px]">cl{rub.classe}</span>
+                        {inSim ? <span className="ml-auto text-[10px] text-green-600">✓</span> : <ArrowRight className="ml-auto h-3 w-3 text-gray-300" />}
+                      </div>
+                      <span className="truncate text-gray-700 w-full">{rub.libelle}</span>
+                    </button>
+                  );
+                })}
+                {filteredCatalog.length > 300 && (
+                  <p className="flex items-center text-[10px] text-gray-400 px-2">{filteredCatalog.length - 300} autres — affinez la recherche</p>
+                )}
+              </div>
             )}
-            {filteredCatalog.length > 300 && (
-              <p className="px-3 py-2 text-center text-[10px] text-gray-400">{filteredCatalog.length - 300} autres — affinez la recherche</p>
-            )}
-          </div>
-          <div className="border-t border-gray-200 px-3 py-1.5 text-[10px] text-gray-400">
-            {allRubriques.length} rubriques · {filteredCatalog.length} affichées
           </div>
         </div>
 
-        {/* Drag handle 1 */}
+        {/* Drag handle 1 — horizontal */}
         <div
           onMouseDown={(e) => startDrag("catalog", e)}
-          className="flex w-1.5 cursor-col-resize items-center justify-center bg-gray-200 hover:bg-blue-400 transition-colors"
+          className="flex h-1.5 cursor-row-resize items-center justify-center bg-gray-200 hover:bg-blue-400 transition-colors"
         >
-          <div className="h-8 w-0.5 rounded bg-gray-400" />
+          <div className="w-8 h-0.5 rounded bg-gray-400" />
         </div>
 
-        {/* Col 2: Table de simulation */}
-        <div style={{ width: `${colWidths.sim}%` }} className="flex flex-col overflow-hidden border-y border-gray-200 bg-white">
+        {/* Row 2: Table de Simulation — horizontal band */}
+        <div style={{ height: `${rowHeights.sim}%` }} className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
           <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
             <h3 className="text-sm font-semibold text-gray-700">
               Table de Simulation
@@ -427,17 +430,17 @@ export function SimulatorPage() {
               <Calculator className="mb-2 h-10 w-10" />
               <p className="text-sm">Sélectionnez un employé</p>
               <p className="text-xs">pour charger son profil de paie</p>
-              <p className="mt-2 text-xs text-gray-400">ou cliquez une rubrique ←</p>
+              <p className="mt-2 text-xs text-gray-400">ou cliquez une rubrique dans le catalogue ↑</p>
             </div>
           ) : (
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-auto">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-gray-50 text-gray-400">
                   <tr>
                     <th className="px-2 py-1 text-left font-normal w-10">Code</th>
                     <th className="px-2 py-1 text-left font-normal">Libellé</th>
-                    <th className="px-2 py-1 text-right font-normal w-20">Montant</th>
-                    <th className="px-2 py-1 text-right font-normal w-16">Nombre</th>
+                    <th className="px-2 py-1 text-right font-normal w-24">Montant</th>
+                    <th className="px-2 py-1 text-right font-normal w-20">Nombre</th>
                     <th className="w-6"></th>
                   </tr>
                 </thead>
@@ -445,7 +448,7 @@ export function SimulatorPage() {
                   {simRubriques.map(r => (
                     <tr key={r.code} className="border-b border-gray-50 hover:bg-blue-50/30">
                       <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
-                      <td className="px-2 py-1 text-gray-700 truncate max-w-[140px]">{r.libelle}</td>
+                      <td className="px-2 py-1 text-gray-700">{r.libelle}</td>
                       <td className="px-1 py-1">
                         <input type="number" value={r.montant || ""} onChange={e => updateSimValue(r.code, "montant", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
                       </td>
@@ -466,16 +469,16 @@ export function SimulatorPage() {
           )}
         </div>
 
-        {/* Drag handle 2 */}
+        {/* Drag handle 2 — horizontal */}
         <div
           onMouseDown={(e) => startDrag("sim", e)}
-          className="flex w-1.5 cursor-col-resize items-center justify-center bg-gray-200 hover:bg-blue-400 transition-colors"
+          className="flex h-1.5 cursor-row-resize items-center justify-center bg-gray-200 hover:bg-blue-400 transition-colors"
         >
-          <div className="h-8 w-0.5 rounded bg-gray-400" />
+          <div className="w-8 h-0.5 rounded bg-gray-400" />
         </div>
 
-        {/* Col 3: Résultat */}
-        <div style={{ width: `${colWidths.result}%` }} className="flex flex-col overflow-hidden rounded-r-xl border border-gray-200 bg-white">
+        {/* Row 3: Résultat — horizontal band */}
+        <div style={{ height: `${rowHeights.result}%` }} className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
           <div className="flex items-center justify-between border-b border-gray-200 px-4 py-2">
             <h3 className="text-sm font-semibold text-gray-700">Résultat</h3>
             {calculating && (
