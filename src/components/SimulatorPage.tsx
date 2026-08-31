@@ -5,7 +5,7 @@ import { PayslipPDF } from "./PayslipPDF";
 import { EmployeePickerModal } from "./EmployeePickerModal";
 import {
   Calculator, Search, Loader2, RotateCcw, FileText,
-  ChevronDown, ChevronRight, Trash2, Zap, ArrowRight, Users,
+  ChevronDown, ChevronRight, Trash2, Zap, ArrowRight, Users, X,
 } from "lucide-react";
 
 interface RubInput {
@@ -50,36 +50,30 @@ export function SimulatorPage() {
   const [showTValues, setShowTValues] = useState(false);
   const [showCalcChain, setShowCalcChain] = useState(false);
   const [showEmpModal, setShowEmpModal] = useState(false);
+  const [showCatalogModal, setShowCatalogModal] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Row heights (percentages) for horizontal stacked layout
-  const [rowHeights, setRowHeights] = useState({ catalog: 20, sim: 25, result: 55 });
-  const dragRef = useRef<{ which: "catalog" | "sim"; startY: number; startHeights: typeof rowHeights } | null>(null);
+  // Column widths (percentages) for 2-panel layout (sim | result)
+  const [colWidths, setColWidths] = useState({ sim: 40, result: 60 });
+  const dragRef = useRef<{ startX: number; startWidths: typeof colWidths } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const startDrag = (which: "catalog" | "sim", e: React.MouseEvent) => {
+  const startDrag = (e: React.MouseEvent) => {
     e.preventDefault();
-    dragRef.current = { which, startY: e.clientY, startHeights: { ...rowHeights } };
-    document.body.style.cursor = "row-resize";
+    dragRef.current = { startX: e.clientX, startWidths: { ...colWidths } };
+    document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   };
 
   useEffect(() => {
     const handleMove = (e: MouseEvent) => {
       if (!dragRef.current || !containerRef.current) return;
-      const containerHeight = containerRef.current.offsetHeight;
-      const delta = ((e.clientY - dragRef.current.startY) / containerHeight) * 100;
-      const { which, startHeights } = dragRef.current;
-      if (which === "catalog") {
-        const newCatalog = Math.max(10, Math.min(40, startHeights.catalog + delta));
-        const newSim = startHeights.sim + startHeights.catalog - newCatalog;
-        setRowHeights({ catalog: newCatalog, sim: Math.max(10, Math.min(50, newSim)), result: 100 - newCatalog - Math.max(10, Math.min(50, newSim)) });
-      } else {
-        const newSim = Math.max(10, Math.min(50, startHeights.sim + delta));
-        const newResult = startHeights.result + startHeights.sim - newSim;
-        setRowHeights({ catalog: rowHeights.catalog, sim: newSim, result: Math.max(20, Math.min(70, newResult)) });
-      }
+      const containerWidth = containerRef.current.offsetWidth;
+      const delta = ((e.clientX - dragRef.current.startX) / containerWidth) * 100;
+      const { startWidths } = dragRef.current;
+      const newSim = Math.max(25, Math.min(60, startWidths.sim + delta));
+      setColWidths({ sim: newSim, result: 100 - newSim });
     };
     const handleUp = () => {
       dragRef.current = null;
@@ -92,7 +86,7 @@ export function SimulatorPage() {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
     };
-  }, [rowHeights]);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -267,6 +261,14 @@ export function SimulatorPage() {
     calcResult?.lines.filter(l => l.amount !== 0 && (l.classe === 2 || (l.classe === 1 && l.amount < 0))) ?? [],
     [calcResult]
   );
+  const taux = useMemo(() =>
+    calcResult?.lines.filter(l => l.amount !== 0 && l.classe === 5) ?? [],
+    [calcResult]
+  );
+  const compteurs = useMemo(() =>
+    calcResult?.lines.filter(l => l.amount !== 0 && (l.classe === 7 || l.classe === 0)) ?? [],
+    [calcResult]
+  );
   const infos = useMemo(() => {
     if (!calcResult) return [];
     const keyCodes = ["763", "765", "767", "770", "807", "817", "819", "824"];
@@ -290,15 +292,26 @@ export function SimulatorPage() {
           <Zap className="h-6 w-6 text-blue-600" />
           <h1 className="text-xl font-bold text-gray-900">Simulateur de Paie</h1>
         </div>
-        {calcResult && (
+        <div className="flex items-center gap-2">
+          {/* Catalogue button — opens modal */}
           <button
-            onClick={() => setShowPayslip(true)}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            onClick={() => setShowCatalogModal(true)}
+            className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700"
           >
-            <FileText className="h-4 w-4" />
-            Aperçu Bulletin
+            <Search className="h-4 w-4" />
+            Catalogue Rubriques
+            <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">{allRubriques.length}</span>
           </button>
-        )}
+          {calcResult && (
+            <button
+              onClick={() => setShowPayslip(true)}
+              className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              <FileText className="h-4 w-4" />
+              Aperçu Bulletin
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Employee + period bar */}
@@ -347,90 +360,35 @@ export function SimulatorPage() {
         </div>
       )}
 
-      {/* 3 horizontal stacked rows */}
-      <div ref={containerRef} className="flex flex-1 flex-col gap-0 overflow-hidden">
-        {/* Row 1: Catalogue — horizontal band */}
-        <div style={{ height: `${rowHeights.catalog}%` }} className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div className="flex items-center gap-3 border-b border-gray-200 px-3 py-2">
-            <h3 className="text-sm font-semibold text-gray-700 whitespace-nowrap">Catalogue des Rubriques</h3>
-            <div className="flex items-center gap-2 flex-1 max-w-md">
-              <Search className="h-4 w-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Code ou libellé..."
-                value={rubSearch}
-                onChange={e => setRubSearch(e.target.value)}
-                className="flex-1 rounded-lg border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
-                autoFocus
-              />
-            </div>
-            <div className="flex flex-wrap gap-1">
-              <button onClick={() => setRubFilterClasse("")} className={`rounded px-2 py-0.5 text-xs ${!rubFilterClasse ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>Toutes</button>
-              {[0, 1, 2, 3, 5].map(c => (
-                <button key={c} onClick={() => setRubFilterClasse(String(c))} className={`rounded px-2 py-0.5 text-xs ${rubFilterClasse === String(c) ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>{classeLabels[c] || `Cl.${c}`}</button>
-              ))}
-            </div>
-            <span className="text-[10px] text-gray-400 whitespace-nowrap">{allRubriques.length} rub · {filteredCatalog.length} affichées</span>
-          </div>
-          {/* Horizontal scrollable list of rubriques */}
-          <div className="flex-1 overflow-x-auto overflow-y-hidden">
-            {filteredCatalog.length === 0 ? (
-              <p className="px-3 py-4 text-center text-xs text-gray-400">Aucune rubrique trouvée</p>
-            ) : (
-              <div className="flex h-full gap-1 px-2 py-1.5">
-                {filteredCatalog.slice(0, 300).map(rub => {
-                  const inSim = simCodes.has(rub.code);
-                  return (
-                    <button
-                      key={rub.code}
-                      onClick={() => !inSim && addToSim(rub)}
-                      disabled={inSim}
-                      className={`flex flex-col items-start gap-0.5 rounded-lg border px-2.5 py-1.5 text-left text-xs whitespace-nowrap min-w-[140px] ${inSim ? "cursor-default border-green-200 bg-green-50/50 text-gray-400" : "border-gray-200 hover:border-blue-400 hover:bg-blue-50"}`}
-                    >
-                      <div className="flex items-center gap-1.5 w-full">
-                        <span className="font-mono text-gray-400">{rub.code}</span>
-                        <span className="text-gray-300 text-[10px]">cl{rub.classe}</span>
-                        {inSim ? <span className="ml-auto text-[10px] text-green-600">✓</span> : <ArrowRight className="ml-auto h-3 w-3 text-gray-300" />}
-                      </div>
-                      <span className="truncate text-gray-700 w-full">{rub.libelle}</span>
-                    </button>
-                  );
-                })}
-                {filteredCatalog.length > 300 && (
-                  <p className="flex items-center text-[10px] text-gray-400 px-2">{filteredCatalog.length - 300} autres — affinez la recherche</p>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Drag handle 1 — horizontal */}
-        <div
-          onMouseDown={(e) => startDrag("catalog", e)}
-          className="flex h-1.5 cursor-row-resize items-center justify-center bg-gray-200 hover:bg-blue-400 transition-colors"
-        >
-          <div className="w-8 h-0.5 rounded bg-gray-400" />
-        </div>
-
-        {/* Row 2: Table de Simulation — horizontal band */}
-        <div style={{ height: `${rowHeights.sim}%` }} className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
+      {/* 2 panels side-by-side: Simulation | Résultat */}
+      <div ref={containerRef} className="flex flex-1 gap-0 overflow-hidden">
+        {/* Panel 1: Table de Simulation */}
+        <div style={{ width: `${colWidths.sim}%` }} className="flex flex-col overflow-hidden rounded-l-xl border border-gray-200 bg-white">
           <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
             <h3 className="text-sm font-semibold text-gray-700">
               Table de Simulation
               {simRubriques.length > 0 && <span className="ml-1 text-xs text-gray-400">({simRubriques.length})</span>}
             </h3>
-            {simRubriques.length > 0 && (
-              <button onClick={clearSim} className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-red-600">
-                <RotateCcw className="h-3 w-3" /> Vider
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowCatalogModal(true)}
+                className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-blue-600 hover:bg-blue-50"
+              >
+                <Search className="h-3 w-3" /> Ajouter
               </button>
-            )}
+              {simRubriques.length > 0 && (
+                <button onClick={clearSim} className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-red-600">
+                  <RotateCcw className="h-3 w-3" /> Vider
+                </button>
+              )}
+            </div>
           </div>
           {simRubriques.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center text-gray-300">
               <Calculator className="mb-2 h-10 w-10" />
               <p className="text-sm">Sélectionnez un employé</p>
               <p className="text-xs">pour charger son profil de paie</p>
-              <p className="mt-2 text-xs text-gray-400">ou cliquez une rubrique dans le catalogue ↑</p>
+              <p className="mt-2 text-xs text-gray-400">ou cliquez « Ajouter » pour des rubriques</p>
             </div>
           ) : (
             <div className="flex-1 overflow-auto">
@@ -469,16 +427,16 @@ export function SimulatorPage() {
           )}
         </div>
 
-        {/* Drag handle 2 — horizontal */}
+        {/* Drag handle between sim and result */}
         <div
-          onMouseDown={(e) => startDrag("sim", e)}
-          className="flex h-1.5 cursor-row-resize items-center justify-center bg-gray-200 hover:bg-blue-400 transition-colors"
+          onMouseDown={(e) => startDrag(e)}
+          className="flex w-1.5 cursor-col-resize items-center justify-center bg-gray-200 hover:bg-blue-400 transition-colors"
         >
-          <div className="w-8 h-0.5 rounded bg-gray-400" />
+          <div className="h-8 w-0.5 rounded bg-gray-400" />
         </div>
 
-        {/* Row 3: Résultat — horizontal band */}
-        <div style={{ height: `${rowHeights.result}%` }} className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
+        {/* Panel 2: Résultat — 4 colonnes par catégorie */}
+        <div style={{ width: `${colWidths.result}%` }} className="flex flex-col overflow-hidden rounded-r-xl border border-gray-200 bg-white">
           <div className="flex items-center justify-between border-b border-gray-200 px-4 py-2">
             <h3 className="text-sm font-semibold text-gray-700">Résultat</h3>
             {calculating && (
@@ -510,121 +468,37 @@ export function SimulatorPage() {
               {calculating ? <Loader2 className="h-8 w-8 animate-spin" /> : <p className="text-sm">En attente du calcul...</p>}
             </div>
           ) : (
-            <div className="flex-1 overflow-y-auto p-4">
-              {/* Net à payer — en premier, bien visible */}
-              <div className="mb-3 flex items-center justify-between rounded-lg border-2 border-green-600 bg-green-50 px-4 py-3">
-                <span className="text-sm font-bold text-gray-900">NET À PAYER</span>
-                <span className="text-2xl font-bold text-green-700">{formatCurrency(calcResult.net_payer)}</span>
-              </div>
-
-              {/* Totals — adaptatif : grid selon largeur */}
-              <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-center">
-                  <p className="text-xs text-gray-500">Brut</p>
-                  <p className="text-sm font-bold text-gray-900">{formatCurrency(calcResult.total_brut)}</p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-center">
-                  <p className="text-xs text-gray-500">Cotisable</p>
-                  <p className="text-sm font-bold text-gray-900">{formatCurrency(calcResult.base_cotisable)}</p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-center">
-                  <p className="text-xs text-gray-500">Imposable</p>
-                  <p className="text-sm font-bold text-gray-900">{formatCurrency(calcResult.base_imposable)}</p>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-center">
-                  <p className="text-xs text-gray-500">Retenues</p>
-                  <p className="text-sm font-bold text-red-600">{formatCurrency(calcResult.total_retenues)}</p>
+            <div className="flex-1 overflow-y-auto p-3">
+              {/* Net à payer + totaux — barre de synthèse */}
+              <div className="mb-3 flex items-center gap-2">
+                <div className="flex items-center justify-between rounded-lg border-2 border-green-600 bg-green-50 px-4 py-2 flex-1">
+                  <span className="text-sm font-bold text-gray-900">NET À PAYER</span>
+                  <span className="text-xl font-bold text-green-700">{formatCurrency(calcResult.net_payer)}</span>
                 </div>
               </div>
-
-              {/* Légende */}
-              <div className="mb-2 flex items-center gap-3 text-[10px] text-gray-400">
-                <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded bg-blue-200" /> Saisi manuellement</span>
-                <span className="flex items-center gap-1"><span className="text-blue-500">✎</span> = modifiable</span>
-                <span>Survolez une ligne pour voir la formule</span>
-              </div>
-
-              {/* Gains / Retenues — adaptatif : side-by-side si large, stacked si étroit */}
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                <div>
-                  <h4 className="mb-1 rounded-t bg-green-50/50 px-2 py-1 text-xs font-bold text-gray-700 border-b border-gray-300">Gains & Primes</h4>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-gray-400 text-[10px]">
-                        <th className="py-0.5 text-left font-normal w-8">Code</th>
-                        <th className="py-0.5 text-left font-normal">Libellé</th>
-                        <th className="py-0.5 text-right font-normal w-16">Base</th>
-                        <th className="py-0.5 text-right font-normal w-10">Taux</th>
-                        <th className="py-0.5 text-right font-normal w-20">Montant</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {gains.map(l => (
-                        <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
-                          <td className="py-0.5 font-mono text-gray-400">{l.code}</td>
-                          <td className="py-0.5 text-gray-700">
-                            {l.libelle}
-                            {l.is_input && <span className="ml-1 text-[9px] text-blue-500">✎</span>}
-                          </td>
-                          <td className="py-0.5 text-right text-gray-400">{l.base_value != null && l.base_value !== 0 ? formatCurrency(l.base_value) : "—"}</td>
-                          <td className="py-0.5 text-right text-gray-400">{l.taux_value != null && l.taux_value !== 0 ? l.taux_value : "—"}</td>
-                          <td className="py-0.5 text-right font-medium text-gray-900">{formatCurrency(l.amount)}</td>
-                        </tr>
-                      ))}
-                      {gains.length === 0 && <tr><td colSpan={5} className="py-2 text-center text-gray-300">Aucun gain</td></tr>}
-                    </tbody>
-                  </table>
+              <div className="mb-3 grid grid-cols-4 gap-1.5">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
+                  <p className="text-[10px] text-gray-500">Brut</p>
+                  <p className="text-xs font-bold text-gray-900">{formatCurrency(calcResult.total_brut)}</p>
                 </div>
-
-                <div>
-                  <h4 className="mb-1 rounded-t bg-red-50/50 px-2 py-1 text-xs font-bold text-gray-700 border-b border-gray-300">Retenues</h4>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-gray-400 text-[10px]">
-                        <th className="py-0.5 text-left font-normal w-8">Code</th>
-                        <th className="py-0.5 text-left font-normal">Libellé</th>
-                        <th className="py-0.5 text-right font-normal w-16">Base</th>
-                        <th className="py-0.5 text-right font-normal w-10">Taux</th>
-                        <th className="py-0.5 text-right font-normal w-20">Montant</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {retenues.map(l => (
-                        <tr key={l.code} className={`border-b border-gray-50 ${l.is_input ? "bg-blue-50/30" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
-                          <td className="py-0.5 font-mono text-gray-400">{l.code}</td>
-                          <td className="py-0.5 text-gray-700">
-                            {l.libelle}
-                            {l.is_input && <span className="ml-1 text-[9px] text-blue-500">✎</span>}
-                          </td>
-                          <td className="py-0.5 text-right text-gray-400">{l.base_value != null && l.base_value !== 0 ? formatCurrency(l.base_value) : "—"}</td>
-                          <td className="py-0.5 text-right text-gray-400">{l.taux_value != null && l.taux_value !== 0 ? l.taux_value : "—"}</td>
-                          <td className="py-0.5 text-right font-medium text-red-600">{formatCurrency(Math.abs(l.amount))}</td>
-                        </tr>
-                      ))}
-                      {retenues.length === 0 && <tr><td colSpan={5} className="py-2 text-center text-gray-300">Aucune retenue</td></tr>}
-                    </tbody>
-                  </table>
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
+                  <p className="text-[10px] text-gray-500">Cotisable</p>
+                  <p className="text-xs font-bold text-gray-900">{formatCurrency(calcResult.base_cotisable)}</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
+                  <p className="text-[10px] text-gray-500">Imposable</p>
+                  <p className="text-xs font-bold text-gray-900">{formatCurrency(calcResult.base_imposable)}</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-center">
+                  <p className="text-[10px] text-gray-500">Retenues</p>
+                  <p className="text-xs font-bold text-red-600">{formatCurrency(calcResult.total_retenues)}</p>
                 </div>
               </div>
 
-              {/* Key infos */}
-              {infos.length > 0 && (
-                <div className="mt-4 rounded bg-gray-50 px-3 py-2">
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                    {infos.map(l => (
-                      <span key={l.code} className="text-gray-600">
-                        <span className="font-medium">{l.libelle}:</span>{" "}
-                        <span className="font-semibold text-gray-900">{formatCurrency(l.amount)}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Scenarios */}
+              {/* Scénarios */}
               {simRubriques.length > 0 && (
-                <div className="mb-3 flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs text-gray-400 mr-1">Scénarios:</span>
+                <div className="mb-2 flex flex-wrap items-center gap-1">
+                  <span className="text-[10px] text-gray-400 mr-1">Scénarios:</span>
                   {[
                     { key: "full", label: "Mois complet" },
                     { key: "absence3", label: "Absence 3j" },
@@ -635,7 +509,7 @@ export function SimulatorPage() {
                     <button
                       key={s.key}
                       onClick={() => applyScenario(s.key as "full" | "absence3" | "conge10" | "maladie5" | "hs20")}
-                      className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600 hover:bg-blue-100 hover:text-blue-700"
+                      className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600 hover:bg-blue-100 hover:text-blue-700"
                     >
                       {s.label}
                     </button>
@@ -643,38 +517,147 @@ export function SimulatorPage() {
                 </div>
               )}
 
-              {/* T[] variables collapsible */}
-              {calcResult.t_values && Object.keys(calcResult.t_values).length > 0 && (
-                <div className="mb-3">
-                  <button
-                    onClick={() => setShowTValues(!showTValues)}
-                    className="flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
-                  >
-                    {showTValues ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                    Variables système T[] ({Object.keys(calcResult.t_values).length})
-                  </button>
-                  {showTValues && (
-                    <TValuesDisplay tValues={calcResult.t_values} />
-                  )}
-                </div>
-              )}
-
-              {/* Calc chain collapsible */}
-              <div className="mb-3">
-                <button
-                  onClick={() => setShowCalcChain(!showCalcChain)}
-                  className="flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
-                >
-                  {showCalcChain ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                  Chaîne de calcul (formules résolues)
-                </button>
-                {showCalcChain && (
-                  <CalcChainDisplay lines={calcResult.lines} />
-                )}
+              {/* Légende */}
+              <div className="mb-2 flex items-center gap-3 text-[9px] text-gray-400">
+                <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded bg-blue-200" /> Saisi</span>
+                <span className="flex items-center gap-1"><span className="text-blue-500">✎</span> modifiable</span>
+                <span>Survol = formule</span>
               </div>
 
-              {/* All lines collapsible */}
-              <AllLinesCollapse lines={calcResult.lines} />
+              {/* 4 colonnes : Gains | Retenues | Taux | Compteurs */}
+              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                {/* Colonne 1: Gains */}
+                <div className="rounded-lg border border-green-200 bg-green-50/30">
+                  <h4 className="rounded-t bg-green-100/60 px-2 py-1 text-[10px] font-bold text-green-800 border-b border-green-200">
+                    GAINS ({gains.length})
+                  </h4>
+                  <div className="max-h-64 overflow-y-auto">
+                    <table className="w-full text-[10px]">
+                      <tbody>
+                        {gains.map(l => (
+                          <tr key={l.code} className={`border-b border-green-50 ${l.is_input ? "bg-blue-50/40" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
+                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">
+                              {l.libelle}
+                              {l.is_input && <span className="ml-0.5 text-[8px] text-blue-500">✎</span>}
+                            </td>
+                            <td className="px-1 py-0.5 text-right font-medium text-gray-900 whitespace-nowrap">{formatCurrency(l.amount)}</td>
+                          </tr>
+                        ))}
+                        {gains.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucun gain</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                  {gains.length > 0 && (
+                    <div className="border-t border-green-200 px-2 py-1 text-[10px] font-bold text-green-800 text-right">
+                      {formatCurrency(gains.reduce((s, l) => s + l.amount, 0))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Colonne 2: Retenues */}
+                <div className="rounded-lg border border-red-200 bg-red-50/30">
+                  <h4 className="rounded-t bg-red-100/60 px-2 py-1 text-[10px] font-bold text-red-800 border-b border-red-200">
+                    RETENUES ({retenues.length})
+                  </h4>
+                  <div className="max-h-64 overflow-y-auto">
+                    <table className="w-full text-[10px]">
+                      <tbody>
+                        {retenues.map(l => (
+                          <tr key={l.code} className={`border-b border-red-50 ${l.is_input ? "bg-blue-50/40" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
+                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">
+                              {l.libelle}
+                              {l.is_input && <span className="ml-0.5 text-[8px] text-blue-500">✎</span>}
+                            </td>
+                            <td className="px-1 py-0.5 text-right font-medium text-red-600 whitespace-nowrap">{formatCurrency(Math.abs(l.amount))}</td>
+                          </tr>
+                        ))}
+                        {retenues.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucune retenue</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                  {retenues.length > 0 && (
+                    <div className="border-t border-red-200 px-2 py-1 text-[10px] font-bold text-red-800 text-right">
+                      {formatCurrency(retenues.reduce((s, l) => s + Math.abs(l.amount), 0))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Colonne 3: Taux & Paramètres */}
+                <div className="rounded-lg border border-amber-200 bg-amber-50/30">
+                  <h4 className="rounded-t bg-amber-100/60 px-2 py-1 text-[10px] font-bold text-amber-800 border-b border-amber-200">
+                    TAUX ({taux.length})
+                  </h4>
+                  <div className="max-h-64 overflow-y-auto">
+                    <table className="w-full text-[10px]">
+                      <tbody>
+                        {taux.map(l => (
+                          <tr key={l.code} className="border-b border-amber-50" title={l.formule || ""}>
+                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
+                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">{l.libelle}</td>
+                            <td className="px-1 py-0.5 text-right font-medium text-amber-700 whitespace-nowrap">
+                              {Number.isInteger(l.amount) ? l.amount : l.amount.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                        {taux.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucun taux</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Colonne 4: Compteurs & Infos */}
+                <div className="rounded-lg border border-blue-200 bg-blue-50/30">
+                  <h4 className="rounded-t bg-blue-100/60 px-2 py-1 text-[10px] font-bold text-blue-800 border-b border-blue-200">
+                    COMPTEURS ({compteurs.length})
+                  </h4>
+                  <div className="max-h-64 overflow-y-auto">
+                    <table className="w-full text-[10px]">
+                      <tbody>
+                        {compteurs.map(l => (
+                          <tr key={l.code} className={`border-b border-blue-50 ${l.is_input ? "bg-blue-100/40" : ""}`} title={l.formule || (l.is_input ? "Saisi manuellement" : "")}>
+                            <td className="px-1 py-0.5 font-mono text-gray-400 w-7">{l.code}</td>
+                            <td className="px-1 py-0.5 text-gray-700 truncate max-w-[80px]">
+                              {l.libelle}
+                              {l.is_input && <span className="ml-0.5 text-[8px] text-blue-500">✎</span>}
+                            </td>
+                            <td className="px-1 py-0.5 text-right font-medium text-gray-900 whitespace-nowrap">{formatCurrency(l.amount)}</td>
+                          </tr>
+                        ))}
+                        {compteurs.length === 0 && <tr><td colSpan={3} className="py-2 text-center text-gray-300">Aucun compteur</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sections collapsibles */}
+              <div className="mt-3 space-y-2">
+                {calcResult.t_values && Object.keys(calcResult.t_values).length > 0 && (
+                  <div>
+                    <button
+                      onClick={() => setShowTValues(!showTValues)}
+                      className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-gray-700"
+                    >
+                      {showTValues ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      Variables T[] ({Object.keys(calcResult.t_values).length})
+                    </button>
+                    {showTValues && <TValuesDisplay tValues={calcResult.t_values} />}
+                  </div>
+                )}
+                <div>
+                  <button
+                    onClick={() => setShowCalcChain(!showCalcChain)}
+                    className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-gray-700"
+                  >
+                    {showCalcChain ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    Chaîne de calcul
+                  </button>
+                  {showCalcChain && <CalcChainDisplay lines={calcResult.lines} />}
+                </div>
+                <AllLinesCollapse lines={calcResult.lines} />
+              </div>
             </div>
           )}
         </div>
@@ -684,12 +667,239 @@ export function SimulatorPage() {
         <PayslipPDF result={calcResult} onClose={() => setShowPayslip(false)} />
       )}
 
+      {/* Catalogue Modal */}
+      {showCatalogModal && (
+        <CatalogModal
+          rubriques={allRubriques}
+          simCodes={simCodes}
+          onAdd={addToSim}
+          onClose={() => setShowCatalogModal(false)}
+        />
+      )}
+
       <EmployeePickerModal
         open={showEmpModal}
         onClose={() => setShowEmpModal(false)}
         onSelect={(emp) => setSelectedEmpId(emp.id)}
         selectedEmpId={selectedEmpId}
       />
+    </div>
+  );
+}
+
+// ============================================================
+// CatalogModal — Modale du catalogue de rubriques (filtres + sélection)
+// ============================================================
+
+function CatalogModal({
+  rubriques,
+  simCodes,
+  onAdd,
+  onClose,
+}: {
+  rubriques: RubriqueMeta[];
+  simCodes: Set<string>;
+  onAdd: (rub: RubriqueMeta) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [filterClasse, setFilterClasse] = useState<string>("");
+  const [filterCalcul, setFilterCalcul] = useState<string>(""); // "" = all, "0" = manuelle, "1" = calculée
+  const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
+
+  const classeLabels: Record<number, string> = {
+    0: "Info/Totaux",
+    1: "Gains",
+    2: "Retenues",
+    3: "Nombre",
+    5: "Taux",
+    7: "Compteur",
+  };
+
+  const filtered = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    return rubriques.filter(r => {
+      if (filterClasse && String(r.classe) !== filterClasse) return false;
+      if (filterCalcul && String(r.calcul) !== filterCalcul) return false;
+      if (!s) return true;
+      return r.code.includes(s) || r.libelle.toLowerCase().includes(s);
+    });
+  }, [rubriques, search, filterClasse, filterCalcul]);
+
+  const toggleSelect = (code: string) => {
+    setSelectedCodes(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  };
+
+  const addSelected = () => {
+    for (const code of selectedCodes) {
+      const rub = rubriques.find(r => r.code === code);
+      if (rub && !simCodes.has(code)) onAdd(rub);
+    }
+    setSelectedCodes(new Set());
+  };
+
+  const addAllFiltered = () => {
+    for (const rub of filtered) {
+      if (!simCodes.has(rub.code)) onAdd(rub);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="flex max-h-[85vh] w-[900px] max-w-[95vw] flex-col rounded-2xl bg-white shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
+          <div className="flex items-center gap-2">
+            <Search className="h-5 w-5 text-blue-600" />
+            <h2 className="text-lg font-bold text-gray-900">Catalogue des Rubriques</h2>
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">{rubriques.length}</span>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Filtres */}
+        <div className="border-b border-gray-100 px-5 py-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Search className="h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Recherche par code ou libellé..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300"
+              autoFocus
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Filtre par classe */}
+            <span className="text-xs text-gray-400">Classe:</span>
+            <button onClick={() => setFilterClasse("")} className={`rounded px-2 py-0.5 text-xs ${!filterClasse ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Toutes</button>
+            {[0, 1, 2, 3, 5, 7].map(c => (
+              <button key={c} onClick={() => setFilterClasse(String(c))} className={`rounded px-2 py-0.5 text-xs ${filterClasse === String(c) ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
+                {classeLabels[c] || `Cl.${c}`}
+              </button>
+            ))}
+            {/* Filtre par type */}
+            <span className="ml-3 text-xs text-gray-400">Type:</span>
+            <button onClick={() => setFilterCalcul("")} className={`rounded px-2 py-0.5 text-xs ${!filterCalcul ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Tous</button>
+            <button onClick={() => setFilterCalcul("0")} className={`rounded px-2 py-0.5 text-xs ${filterCalcul === "0" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Manuelles</button>
+            <button onClick={() => setFilterCalcul("1")} className={`rounded px-2 py-0.5 text-xs ${filterCalcul === "1" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Calculées</button>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-400">{filtered.length} rubrique(s) trouvée(s)</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={addAllFiltered}
+                className="rounded-lg border border-gray-300 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+              >
+                Tout ajouter ({filtered.filter(r => !simCodes.has(r.code)).length})
+              </button>
+              {selectedCodes.size > 0 && (
+                <button
+                  onClick={addSelected}
+                  className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                >
+                  Ajouter ({selectedCodes.size})
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Tableau des rubriques */}
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-gray-50 text-gray-400 text-xs">
+              <tr>
+                <th className="px-3 py-2 text-left font-normal w-8">
+                  <input
+                    type="checkbox"
+                    checked={filtered.length > 0 && filtered.every(r => selectedCodes.has(r.code))}
+                    onChange={e => {
+                      if (e.target.checked) {
+                        setSelectedCodes(new Set(filtered.map(r => r.code)));
+                      } else {
+                        setSelectedCodes(new Set());
+                      }
+                    }}
+                    className="rounded"
+                  />
+                </th>
+                <th className="px-3 py-2 text-left font-normal w-12">Code</th>
+                <th className="px-3 py-2 text-left font-normal">Libellé</th>
+                <th className="px-3 py-2 text-left font-normal w-20">Classe</th>
+                <th className="px-3 py-2 text-left font-normal w-20">Type</th>
+                <th className="px-3 py-2 text-left font-normal w-32">Formule</th>
+                <th className="px-3 py-2 text-center font-normal w-16">Statut</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(rub => {
+                const inSim = simCodes.has(rub.code);
+                const isSelected = selectedCodes.has(rub.code);
+                return (
+                  <tr
+                    key={rub.code}
+                    className={`border-b border-gray-50 hover:bg-blue-50/30 ${isSelected ? "bg-blue-50/50" : ""} ${inSim ? "opacity-50" : ""}`}
+                  >
+                    <td className="px-3 py-1.5">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(rub.code)}
+                        disabled={inSim}
+                        className="rounded"
+                      />
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-gray-500">{rub.code}</td>
+                    <td className="px-3 py-1.5 text-gray-700">{rub.libelle}</td>
+                    <td className="px-3 py-1.5">
+                      <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
+                        {classeLabels[rub.classe] || `Cl.${rub.classe}`}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] ${rub.calcul === 1 ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
+                        {rub.calcul === 1 ? "Calculée" : "Manuelle"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-[10px] text-gray-400 truncate max-w-[120px]" title={rub.formule || ""}>
+                      {rub.formule || "—"}
+                    </td>
+                    <td className="px-3 py-1.5 text-center">
+                      {inSim ? (
+                        <span className="text-[10px] text-green-600 font-medium">✓ Dans sim</span>
+                      ) : (
+                        <button
+                          onClick={() => onAdd(rub)}
+                          className="rounded px-2 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100"
+                        >
+                          + Ajouter
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-gray-400">Aucune rubrique trouvée</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
