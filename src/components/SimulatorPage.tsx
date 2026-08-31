@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import { api, type CalcResult, type CalcLine, type EmployeeSummary } from "../lib/api";
 import { formatCurrency } from "../lib/utils";
 import { PayslipPDF } from "./PayslipPDF";
@@ -418,21 +418,70 @@ export function SimulatorPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {simRubriques.map(r => (
-                    <tr key={r.code} className="border-b border-gray-50 hover:bg-blue-50/30">
-                      <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
-                      <td className="px-2 py-1 text-gray-700">{r.libelle}</td>
-                      <td className="px-1 py-1">
-                        <input type="number" value={r.montant || ""} onChange={e => updateSimValue(r.code, "montant", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input type="number" value={r.nombre || ""} onChange={e => updateSimValue(r.code, "nombre", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
-                      </td>
-                      <td className="px-1 py-1">
-                        <button onClick={() => removeFromSim(r.code)} className="text-gray-300 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
-                      </td>
-                    </tr>
-                  ))}
+                  {/* Section 1 : Gains & Retenues (classe 1 et 2) */}
+                  {(() => {
+                    const gainsRetenues = simRubriques.filter(r => r.classe === 1 || r.classe === 2);
+                    const params = simRubriques.filter(r => r.classe !== 1 && r.classe !== 2);
+                    return (
+                      <>
+                        {gainsRetenues.length > 0 && (
+                          <tr className="bg-blue-50/50 border-y border-blue-200">
+                            <td colSpan={5} className="px-2 py-1 text-[10px] font-bold text-blue-800">
+                              GAINS & RETENUES ({gainsRetenues.length})
+                            </td>
+                          </tr>
+                        )}
+                        {gainsRetenues.map(r => (
+                          <tr key={r.code} className={`border-b border-gray-50 hover:bg-blue-50/30 ${r.classe === 2 ? "bg-red-50/20" : ""}`}>
+                            <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
+                            <td className="px-2 py-1 text-gray-700">
+                              {r.libelle}
+                              {r.classe === 2 && <span className="ml-1 text-[8px] text-red-400">retenue</span>}
+                            </td>
+                            <td className="px-1 py-1">
+                              <input type="number" value={r.montant || ""} onChange={e => updateSimValue(r.code, "montant", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
+                            </td>
+                            <td className="px-1 py-1">
+                              <input type="number" value={r.nombre || ""} onChange={e => updateSimValue(r.code, "nombre", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
+                            </td>
+                            <td className="px-1 py-1">
+                              <button onClick={() => removeFromSim(r.code)} className="text-gray-300 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
+                            </td>
+                          </tr>
+                        ))}
+                        {/* Section 2 : Paramètres de calcul (classe 3, 4, 5, 7) */}
+                        {params.length > 0 && (
+                          <>
+                            <tr className="bg-gray-100 border-y border-gray-300">
+                              <td colSpan={5} className="px-2 py-1 text-[10px] font-bold text-gray-500">
+                                PARAMÈTRES DE CALCUL ({params.length}) — nombres, taux, compteurs
+                              </td>
+                            </tr>
+                            {params.map(r => (
+                              <tr key={r.code} className="border-b border-gray-50 bg-gray-50/30 hover:bg-gray-100/50">
+                                <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
+                                <td className="px-2 py-1 text-gray-500">
+                                  {r.libelle}
+                                  <span className="ml-1 text-[8px] text-gray-400">
+                                    {r.classe === 3 ? "nb" : r.classe === 5 ? "taux" : r.classe === 7 ? "cpt" : `cl${r.classe}`}
+                                  </span>
+                                </td>
+                                <td className="px-1 py-1">
+                                  <input type="number" value={r.montant || ""} onChange={e => updateSimValue(r.code, "montant", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
+                                </td>
+                                <td className="px-1 py-1">
+                                  <input type="number" value={r.nombre || ""} onChange={e => updateSimValue(r.code, "nombre", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
+                                </td>
+                                <td className="px-1 py-1">
+                                  <button onClick={() => removeFromSim(r.code)} className="text-gray-300 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
+                                </td>
+                              </tr>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -1026,24 +1075,75 @@ const tLabels: Record<string, string> = {
   "78": "Heures/jour",
 };
 
+const tCategories: { title: string; keys: string[]; color: string }[] = [
+  { title: "Bases de calcul", keys: ["1", "43", "52", "58"], color: "blue" },
+  { title: "Totaux", keys: ["3", "4", "7"], color: "green" },
+  { title: "Temps de travail", keys: ["9", "10", "15", "16", "17", "78"], color: "amber" },
+  { title: "Cotisations & IRG", keys: ["40", "41", "47", "51", "53", "57", "76", "77"], color: "purple" },
+];
+
 function TValuesDisplay({ tValues }: { tValues: Record<string, number> }) {
-  const sorted = Object.entries(tValues).sort((a, b) => Number(a[0]) - Number(b[0]));
+  const colorMap: Record<string, string> = {
+    blue: "border-blue-200 bg-blue-50/30 text-blue-900",
+    green: "border-green-200 bg-green-50/30 text-green-900",
+    amber: "border-amber-200 bg-amber-50/30 text-amber-900",
+    purple: "border-purple-200 bg-purple-50/30 text-purple-900",
+  };
+  const headerColorMap: Record<string, string> = {
+    blue: "bg-blue-100/60 text-blue-800 border-blue-200",
+    green: "bg-green-100/60 text-green-800 border-green-200",
+    amber: "bg-amber-100/60 text-amber-800 border-amber-200",
+    purple: "bg-purple-100/60 text-purple-800 border-purple-200",
+  };
+  // Collect all keys present in tValues
+  const allKeys = Object.keys(tValues).sort((a, b) => Number(a) - Number(b));
+  const categorizedKeys = new Set(tCategories.flatMap(c => c.keys));
+  const uncategorized = allKeys.filter(k => !categorizedKeys.has(k));
+
   return (
-    <div className="mt-1 rounded-lg border border-gray-200 bg-gray-50 p-3">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
-        {sorted.map(([key, val]) => (
-          <div key={key} className="flex items-center justify-between gap-2">
-            <span className="text-gray-500">
-              <span className="font-mono text-gray-400">T[{key}]</span>
-              {" "}
-              <span className="text-[10px]">{tLabels[key] || ""}</span>
-            </span>
-            <span className={`font-semibold ${key === "52" || key === "1" || key === "43" ? "text-gray-900" : "text-gray-600"}`}>
-              {Number.isInteger(val) ? val : val.toFixed(4)}
-            </span>
-          </div>
-        ))}
-      </div>
+    <div className="mt-1 rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <table className="w-full text-[10px]">
+        <tbody>
+          {tCategories.map(cat => {
+            const present = cat.keys.filter(k => k in tValues);
+            if (present.length === 0) return null;
+            return (
+              <Fragment key={cat.title}>
+                <tr className={`border-y ${headerColorMap[cat.color]}`}>
+                  <td colSpan={3} className="px-2 py-1 font-bold">
+                    {cat.title}
+                  </td>
+                </tr>
+                {present.map(key => (
+                  <tr key={key} className="border-b border-gray-50">
+                    <td className="px-2 py-0.5 font-mono text-gray-400 w-12">T[{key}]</td>
+                    <td className="px-2 py-0.5 text-gray-600">{tLabels[key] || "—"}</td>
+                    <td className="px-2 py-0.5 text-right font-semibold text-gray-900 whitespace-nowrap">
+                      {Number.isInteger(tValues[key]) ? tValues[key] : tValues[key].toFixed(4)}
+                    </td>
+                  </tr>
+                ))}
+              </Fragment>
+            );
+          })}
+          {uncategorized.length > 0 && (
+            <Fragment>
+              <tr className="border-y bg-gray-100 text-gray-600">
+                <td colSpan={3} className="px-2 py-1 font-bold">Autres</td>
+              </tr>
+              {uncategorized.map(key => (
+                <tr key={key} className="border-b border-gray-50">
+                  <td className="px-2 py-0.5 font-mono text-gray-400 w-12">T[{key}]</td>
+                  <td className="px-2 py-0.5 text-gray-600">{tLabels[key] || "—"}</td>
+                  <td className="px-2 py-0.5 text-right font-semibold text-gray-900 whitespace-nowrap">
+                    {Number.isInteger(tValues[key]) ? tValues[key] : tValues[key].toFixed(4)}
+                  </td>
+                </tr>
+              ))}
+            </Fragment>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1131,3 +1231,4 @@ function CalcChainDisplay({ lines }: { lines: CalcLine[] }) {
     </div>
   );
 }
+
