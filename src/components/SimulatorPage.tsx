@@ -412,71 +412,79 @@ export function SimulatorPage() {
                   <tr>
                     <th className="px-2 py-1 text-left font-normal w-10">Code</th>
                     <th className="px-2 py-1 text-left font-normal">Libellé</th>
-                    <th className="px-2 py-1 text-right font-normal w-24">Montant</th>
-                    <th className="px-2 py-1 text-right font-normal w-20">Nombre</th>
+                    <th className="px-2 py-1 text-right font-normal w-28">Valeur</th>
+                    <th className="px-2 py-1 text-center font-normal w-12">Type</th>
                     <th className="w-6"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {/* Section 1 : Gains & Retenues (classe 1 et 2) */}
                   {(() => {
                     const gainsRetenues = simRubriques.filter(r => r.classe === 1 || r.classe === 2);
                     const params = simRubriques.filter(r => r.classe !== 1 && r.classe !== 2);
+                    // Determine value type based on classe:
+                    // classe 1/2 → M (montant), classe 3/4 → N (nombre), classe 5 → T (taux), classe 7 → N (nombre)
+                    const getValueType = (classe: number): "M" | "N" | "T" => {
+                      if (classe === 1 || classe === 2) return "M";
+                      if (classe === 5) return "T";
+                      return "N"; // classe 3, 4, 7
+                    };
+                    const valueTypeLabel: Record<string, string> = { M: "Montant", N: "Nombre", T: "Taux" };
+                    const valueTypeColor: Record<string, string> = {
+                      M: "text-blue-600 bg-blue-50",
+                      N: "text-amber-600 bg-amber-50",
+                      T: "text-purple-600 bg-purple-50",
+                    };
+                    const renderRow = (r: typeof simRubriques[0], isParam: boolean) => {
+                      const vtype = getValueType(r.classe);
+                      const field = vtype === "M" ? "montant" : "nombre";
+                      const value = r[field] || "";
+                      return (
+                        <tr key={r.code} className={`border-b border-gray-50 hover:bg-blue-50/30 ${isParam ? "bg-gray-50/30" : r.classe === 2 ? "bg-red-50/20" : ""}`}>
+                          <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
+                          <td className="px-2 py-1 text-gray-700">
+                            {r.libelle}
+                            {r.classe === 2 && <span className="ml-1 text-[8px] text-red-400">retenue</span>}
+                          </td>
+                          <td className="px-1 py-1">
+                            <input
+                              type="number"
+                              value={value}
+                              onChange={e => updateSimValue(r.code, field, parseFloat(e.target.value) || 0)}
+                              className={`w-full rounded border px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300 ${isParam ? "border-gray-200 bg-gray-50/50" : "border-gray-200"}`}
+                              placeholder="0"
+                            />
+                          </td>
+                          <td className="px-1 py-1 text-center">
+                            <span className={`rounded px-1 py-0.5 text-[8px] font-medium ${valueTypeColor[vtype]}`}>
+                              {vtype}
+                            </span>
+                          </td>
+                          <td className="px-1 py-1">
+                            <button onClick={() => removeFromSim(r.code)} className="text-gray-300 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
+                          </td>
+                        </tr>
+                      );
+                    };
                     return (
                       <>
                         {gainsRetenues.length > 0 && (
-                          <tr className="bg-blue-50/50 border-y border-blue-200">
-                            <td colSpan={5} className="px-2 py-1 text-[10px] font-bold text-blue-800">
-                              GAINS & RETENUES ({gainsRetenues.length})
-                            </td>
-                          </tr>
+                          <>
+                            <tr className="bg-blue-50/50 border-y border-blue-200">
+                              <td colSpan={5} className="px-2 py-1 text-[10px] font-bold text-blue-800">
+                                GAINS & RETENUES ({gainsRetenues.length}) — saisie en Montant (M)
+                              </td>
+                            </tr>
+                            {gainsRetenues.map(r => renderRow(r, false))}
+                          </>
                         )}
-                        {gainsRetenues.map(r => (
-                          <tr key={r.code} className={`border-b border-gray-50 hover:bg-blue-50/30 ${r.classe === 2 ? "bg-red-50/20" : ""}`}>
-                            <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
-                            <td className="px-2 py-1 text-gray-700">
-                              {r.libelle}
-                              {r.classe === 2 && <span className="ml-1 text-[8px] text-red-400">retenue</span>}
-                            </td>
-                            <td className="px-1 py-1">
-                              <input type="number" value={r.montant || ""} onChange={e => updateSimValue(r.code, "montant", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
-                            </td>
-                            <td className="px-1 py-1">
-                              <input type="number" value={r.nombre || ""} onChange={e => updateSimValue(r.code, "nombre", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
-                            </td>
-                            <td className="px-1 py-1">
-                              <button onClick={() => removeFromSim(r.code)} className="text-gray-300 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
-                            </td>
-                          </tr>
-                        ))}
-                        {/* Section 2 : Paramètres de calcul (classe 3, 4, 5, 7) */}
                         {params.length > 0 && (
                           <>
                             <tr className="bg-gray-100 border-y border-gray-300">
                               <td colSpan={5} className="px-2 py-1 text-[10px] font-bold text-gray-500">
-                                PARAMÈTRES DE CALCUL ({params.length}) — nombres, taux, compteurs
+                                PARAMÈTRES DE CALCUL ({params.length}) — saisie en Nombre (N) ou Taux (T)
                               </td>
                             </tr>
-                            {params.map(r => (
-                              <tr key={r.code} className="border-b border-gray-50 bg-gray-50/30 hover:bg-gray-100/50">
-                                <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
-                                <td className="px-2 py-1 text-gray-500">
-                                  {r.libelle}
-                                  <span className="ml-1 text-[8px] text-gray-400">
-                                    {r.classe === 3 ? "nb" : r.classe === 5 ? "taux" : r.classe === 7 ? "cpt" : `cl${r.classe}`}
-                                  </span>
-                                </td>
-                                <td className="px-1 py-1">
-                                  <input type="number" value={r.montant || ""} onChange={e => updateSimValue(r.code, "montant", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
-                                </td>
-                                <td className="px-1 py-1">
-                                  <input type="number" value={r.nombre || ""} onChange={e => updateSimValue(r.code, "nombre", parseFloat(e.target.value) || 0)} className="w-full rounded border border-gray-200 px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300" placeholder="0" />
-                                </td>
-                                <td className="px-1 py-1">
-                                  <button onClick={() => removeFromSim(r.code)} className="text-gray-300 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
-                                </td>
-                              </tr>
-                            ))}
+                            {params.map(r => renderRow(r, true))}
                           </>
                         )}
                       </>
