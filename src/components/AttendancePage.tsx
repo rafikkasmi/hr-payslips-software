@@ -17,13 +17,13 @@ const statusColors: Record<string, string> = {
 };
 
 const statusLabels: Record<string, string> = {
-  working: "Working",
+  working: "Travail",
   absent: "Absent",
-  leave: "Leave",
-  sick_leave: "Sick",
-  unpaid_leave: "Unpaid",
-  maternity_leave: "Maternity",
-  weekend: "Weekend",
+  leave: "Congé",
+  sick_leave: "Maladie",
+  unpaid_leave: "Sans solde",
+  maternity_leave: "Maternité",
+  weekend: "Week-end",
   normal: "—",
 };
 
@@ -144,7 +144,7 @@ export function AttendancePage() {
     return acc;
   }, {} as Record<string, number>);
 
-  const monthName = new Date(year, month - 1, 1).toLocaleDateString("en", { month: "long", year: "numeric" });
+  const monthName = new Date(year, month - 1, 1).toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
 
   return (
     <div className="flex h-full">
@@ -156,7 +156,7 @@ export function AttendancePage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search employee..."
+              placeholder="Rechercher un employé..."
               className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm"
             />
           </div>
@@ -184,14 +184,14 @@ export function AttendancePage() {
         {!selectedEmpId ? (
           <div className="flex flex-col items-center justify-center h-full">
             <Users className="h-16 w-16 text-gray-300" />
-            <p className="mt-4 text-sm text-gray-500">Select an employee to view attendance</p>
+            <p className="mt-4 text-sm text-gray-500">Sélectionnez un employé pour voir les présences</p>
           </div>
         ) : (
           <>
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-xl font-bold text-gray-900">{selectedEmp?.nom} {selectedEmp?.prenom}</h1>
-                <p className="text-sm text-gray-500">Matricule: {selectedEmp?.matricule} · PIN: {selectedEmp?.pointeuse_pin ?? "—"}</p>
+                <p className="text-sm text-gray-500">Matricule : {selectedEmp?.matricule} · PIN : {selectedEmp?.pointeuse_pin ?? "—"}</p>
               </div>
             </div>
 
@@ -236,7 +236,7 @@ export function AttendancePage() {
                 {/* Calendar grid */}
                 <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
                   <div className="grid grid-cols-7 gap-1.5">
-                    {["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"].map(d => (
+                    {["Sam", "Dim", "Lun", "Mar", "Mer", "Jeu", "Ven"].map(d => (
                       <div key={d} className="text-center text-xs font-semibold text-gray-400 pb-2">{d}</div>
                     ))}
                     {(() => {
@@ -282,7 +282,7 @@ export function AttendancePage() {
                   <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
                     <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-3">
                       <Clock className="h-4 w-4 text-gray-400" />
-                      Punch Log — {monthName}
+                      Journal de pointage — {monthName}
                     </h3>
                     <div className="space-y-2 max-h-60 overflow-y-auto">
                       {Object.entries(attendanceByDate).sort(([a], [b]) => b.localeCompare(a)).map(([date, punches]) => (
@@ -304,7 +304,7 @@ export function AttendancePage() {
                 {Object.keys(attendanceByDate).length === 0 && !loading && (
                   <div className="mt-6 rounded-xl border border-gray-200 bg-white p-8 text-center">
                     <Fingerprint className="mx-auto h-10 w-10 text-gray-300" />
-                    <p className="mt-3 text-sm text-gray-500">No punch data for this month</p>
+                    <p className="mt-3 text-sm text-gray-500">Aucune donnée de pointage pour ce mois</p>
                   </div>
                 )}
 
@@ -313,10 +313,10 @@ export function AttendancePage() {
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                       <Timer className="h-4 w-4 text-gray-400" />
-                      Overtime — {monthName}
+                      Heures supplémentaires — {monthName}
                     </h3>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${otStatus === "confirmed" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-                      {otStatus}
+                      {otStatus === "confirmed" ? "Confirmé" : "Brouillon"}
                     </span>
                   </div>
                   {otLoading ? (
@@ -325,7 +325,7 @@ export function AttendancePage() {
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="text-xs text-gray-500 block mb-1">Hours at 50% rate</label>
+                          <label className="text-xs text-gray-500 block mb-1">Heures à 50%</label>
                           <input
                             type="number"
                             step="0.5"
@@ -336,7 +336,7 @@ export function AttendancePage() {
                           />
                         </div>
                         <div>
-                          <label className="text-xs text-gray-500 block mb-1">Hours at 100% rate</label>
+                          <label className="text-xs text-gray-500 block mb-1">Heures à 100%</label>
                           <input
                             type="number"
                             step="0.5"
@@ -353,19 +353,19 @@ export function AttendancePage() {
                           disabled={otSaving || otStatus === "confirmed"}
                           className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                         >
-                          <Save className="h-3.5 w-3.5" /> Save
+                          <Save className="h-3.5 w-3.5" /> Enregistrer
                         </button>
                         {otStatus !== "confirmed" && (
                           <button
                             onClick={handleConfirmOvertime}
                             className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
                           >
-                            <CheckCircle className="h-3.5 w-3.5" /> Confirm
+                            <CheckCircle className="h-3.5 w-3.5" /> Confirmer
                           </button>
                         )}
                       </div>
                       {otStatus === "confirmed" && (
-                        <p className="text-xs text-green-600">Overtime confirmed — will be injected into salary calculation for this period.</p>
+                        <p className="text-xs text-green-600">Heures supplémentaires confirmées — seront injectées dans le calcul du salaire pour cette période.</p>
                       )}
                     </div>
                   )}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { api, type EmployeeSummary, type EmployeeFilterOptions } from "../lib/api";
 import {
   Search, X, Users, ChevronLeft, ChevronRight, Loader2,

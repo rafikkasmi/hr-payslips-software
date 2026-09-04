@@ -1,36 +1,24 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
-import { api, type CalcResult, type CalcLine, type EmployeeSummary } from "../lib/api";
+﻿import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { api, type CalcResult, type EmployeeSummary, type PosteSummary } from "../lib/api";
 import { formatCurrency } from "../lib/utils";
 import { PayslipPDF } from "./PayslipPDF";
 import { EmployeePickerModal } from "./EmployeePickerModal";
+import { CatalogModal } from "./simulator/CatalogModal";
+import { AllLinesCollapse } from "./simulator/AllLinesCollapse";
+import { TValuesDisplay } from "./simulator/TValuesDisplay";
+import { CalcChainDisplay } from "./simulator/CalcChainDisplay";
+import { SaveProfileModal } from "./simulator/SaveProfileModal";
+import type { RubInput, RubriqueMeta } from "./simulator/types";
 import {
   Calculator, Search, Loader2, RotateCcw, FileText,
-  ChevronDown, ChevronRight, Trash2, Zap, ArrowRight, Users, X,
+  ChevronDown, ChevronRight, Trash2, Zap, Users,
+  Save,
 } from "lucide-react";
-
-interface RubInput {
-  code: string;
-  libelle: string;
-  montant: number;
-  nombre: number;
-  classe: number;
-  formule: string | null;
-  calcul: number;
-}
-
-interface RubriqueMeta {
-  code: string;
-  libelle: string;
-  classe: number;
-  init_val: number;
-  formule: string | null;
-  calcul: number; // 0 = manuelle/saisissable, 1 = calculée
-}
 
 export function SimulatorPage() {
   const [employees, setEmployees] = useState<EmployeeSummary[]>([]);
   const [selectedEmpId, setSelectedEmpId] = useState<number | null>(null);
-  const [loadingEmps, setLoadingEmps] = useState(true);
+  const [_loadingEmps, setLoadingEmps] = useState(true);
 
   const [period, setPeriod] = useState(() => {
     const d = new Date();
@@ -38,8 +26,6 @@ export function SimulatorPage() {
   });
 
   const [allRubriques, setAllRubriques] = useState<RubriqueMeta[]>([]);
-  const [rubSearch, setRubSearch] = useState("");
-  const [rubFilterClasse, setRubFilterClasse] = useState<string>("");
 
   const [simRubriques, setSimRubriques] = useState<RubInput[]>([]);
 
@@ -51,6 +37,10 @@ export function SimulatorPage() {
   const [showCalcChain, setShowCalcChain] = useState(false);
   const [showEmpModal, setShowEmpModal] = useState(false);
   const [showCatalogModal, setShowCatalogModal] = useState(false);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [postes, setPostes] = useState<PosteSummary[]>([]);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -92,7 +82,7 @@ export function SimulatorPage() {
     (async () => {
       setLoadingEmps(true);
       try {
-        const emps = await api.getEmployees({ actifOnly: true, pageSize: 500 });
+        const emps = await api.getEmployees({ actif_only: true, page_size: 500 });
         setEmployees(emps);
       } catch (e) {
         console.error("Failed to load employees:", e);
@@ -136,18 +126,23 @@ export function SimulatorPage() {
         .map(r => {
           const code = String(r.code ?? "").replace(/^R/, "").padStart(3, "0");
           const meta = allRubriques.find(m => m.code === code);
+          const val = Number(r.value ?? meta?.init_val ?? 0);
+          const cl = meta?.classe ?? 0;
+          // classe 3 (Nombre), 4 (Compteur), 7 (Paramètre): value goes in nombre
+          // classe 1 (Gain), 2 (Retenue), 5 (Taux): value goes in montant
+          const isNombre = cl === 3 || cl === 4 || cl === 7;
           return {
             code,
             libelle: String(r.libelle ?? meta?.libelle ?? "(sans libellé)"),
-            montant: Number(r.value ?? meta?.init_val ?? 0),
-            nombre: 0,
-            classe: meta?.classe ?? 0,
+            montant: isNombre ? 0 : val,
+            nombre: isNombre ? val : 0,
+            classe: cl,
             formule: meta?.formule ?? null,
             calcul: meta?.calcul ?? 0,
           };
         })
-        // Filter: only rubriques with calcul=0 (manuelles/saisissables) AND with a libellé
-        .filter(r => r.calcul === 0 && r.libelle && r.libelle.trim() !== "" && r.libelle !== "(sans libellé)");
+        // Filter: only rubriques with a libellé (show both manual AND calculated)
+        .filter(r => r.libelle && r.libelle.trim() !== "" && r.libelle !== "(sans libellé)");
       setSimRubriques(inputs);
     } catch (e) {
       console.error("Failed to load profile rubriques:", e);
@@ -164,15 +159,6 @@ export function SimulatorPage() {
       setCalcResult(null);
     }
   }, [selectedEmpId, loadProfileRubriques]);
-
-  const filteredCatalog = useMemo(() => {
-    const s = rubSearch.trim().toLowerCase();
-    return allRubriques.filter(r => {
-      if (rubFilterClasse && String(r.classe) !== rubFilterClasse) return false;
-      if (!s) return true;
-      return r.code.includes(s) || r.libelle.toLowerCase().includes(s);
-    });
-  }, [allRubriques, rubSearch, rubFilterClasse]);
 
   const simCodes = useMemo(() => new Set(simRubriques.map(r => r.code)), [simRubriques]);
 
@@ -238,6 +224,67 @@ export function SimulatorPage() {
     }
   }, []);
 
+  // Load postes list for save modal
+  const loadPostes = useCallback(async () => {
+    try {
+      const p = await api.getPostes();
+      setPostes(p);
+    } catch (e) { console.error(e); }
+  }, []);
+
+  // Save rubriques to a poste profile
+  const saveToPoste = async (posteId: number) => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      for (const r of simRubriques) {
+        const val = (r.classe === 3 || r.classe === 4 || r.classe === 7) ? r.nombre : r.montant;
+        await api.updatePosteRubrique(posteId, `R${r.code}`, val);
+      }
+      setSaveMsg(`Profil mis à  jour avec ${simRubriques.length} rubriques.`);
+    } catch (e) {
+      setSaveMsg(`Erreur: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Save rubriques as employee overrides
+  const saveToEmployee = async (employeeId: number) => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      for (const r of simRubriques) {
+        const val = (r.classe === 3 || r.classe === 4 || r.classe === 7) ? r.nombre : r.montant;
+        await api.updateEmployeeRubrique(employeeId, `R${r.code}`, val, "Sauvegarde simulateur");
+      }
+      setSaveMsg(`Rubriques employé mises à  jour (${simRubriques.length}).`);
+    } catch (e) {
+      setSaveMsg(`Erreur: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Save as new poste profile
+  const saveAsNewPoste = async (name: string, description: string) => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const newId = await api.createPoste(name, description || null);
+      for (const r of simRubriques) {
+        const val = (r.classe === 3 || r.classe === 4 || r.classe === 7) ? r.nombre : r.montant;
+        await api.updatePosteRubrique(newId, `R${r.code}`, val);
+      }
+      setSaveMsg(`Nouveau profil "${name}" créé avec ${simRubriques.length} rubriques.`);
+      await loadPostes();
+    } catch (e) {
+      setSaveMsg(`Erreur: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   useEffect(() => {
     if (!selectedEmpId || simRubriques.length === 0) {
       setCalcResult(null);
@@ -290,15 +337,6 @@ export function SimulatorPage() {
     };
   }, [calcResult]);
 
-  const classeLabels: Record<number, string> = {
-    0: "Info/Totaux",
-    1: "Gains",
-    2: "Retenues",
-    3: "Nombre",
-    5: "Taux",
-    7: "Compteur",
-  };
-
   return (
     <div className="flex h-full flex-col p-4 gap-3">
       {/* Header */}
@@ -324,6 +362,15 @@ export function SimulatorPage() {
             >
               <FileText className="h-4 w-4" />
               Aperçu Bulletin
+            </button>
+          )}
+          {simRubriques.length > 0 && selectedEmp && (
+            <button
+              onClick={() => { loadPostes(); setShowSaveModal(true); setSaveMsg(null); }}
+              className="flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 text-sm font-medium text-green-700 hover:bg-green-100"
+            >
+              <Save className="h-4 w-4" />
+              Sauvegarder
             </button>
           )}
         </div>
@@ -422,13 +469,12 @@ export function SimulatorPage() {
                     const gainsRetenues = simRubriques.filter(r => r.classe === 1 || r.classe === 2);
                     const params = simRubriques.filter(r => r.classe !== 1 && r.classe !== 2);
                     // Determine value type based on classe:
-                    // classe 1/2 → M (montant), classe 3/4 → N (nombre), classe 5 → T (taux), classe 7 → N (nombre)
+                    // classe 1/2 → M (montant), classe 3/4 → N (nombre), classe 5 → T (taux, stocké en montant), classe 7 → N (nombre)
                     const getValueType = (classe: number): "M" | "N" | "T" => {
                       if (classe === 1 || classe === 2) return "M";
                       if (classe === 5) return "T";
                       return "N"; // classe 3, 4, 7
                     };
-                    const valueTypeLabel: Record<string, string> = { M: "Montant", N: "Nombre", T: "Taux" };
                     const valueTypeColor: Record<string, string> = {
                       M: "text-blue-600 bg-blue-50",
                       N: "text-amber-600 bg-amber-50",
@@ -436,27 +482,39 @@ export function SimulatorPage() {
                     };
                     const renderRow = (r: typeof simRubriques[0], isParam: boolean) => {
                       const vtype = getValueType(r.classe);
-                      const field = vtype === "M" ? "montant" : "nombre";
+                      // classe 1/2/5 → montant (M), classe 3/4/7 → nombre (N)
+                      const field = (vtype === "M" || vtype === "T") ? "montant" : "nombre";
                       const value = r[field] || "";
+                      const isCalc = r.calcul === 1;
                       return (
-                        <tr key={r.code} className={`border-b border-gray-50 hover:bg-blue-50/30 ${isParam ? "bg-gray-50/30" : r.classe === 2 ? "bg-red-50/20" : ""}`}>
+                        <tr key={r.code} className={`border-b border-gray-50 hover:bg-blue-50/30 ${isParam ? "bg-gray-50/30" : r.classe === 2 ? "bg-red-50/20" : ""} ${isCalc ? "opacity-60" : ""}`}>
                           <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
                           <td className="px-2 py-1 text-gray-700">
                             {r.libelle}
                             {r.classe === 2 && <span className="ml-1 text-[8px] text-red-400">retenue</span>}
+                            {isCalc && <span className="ml-1 text-[8px] text-amber-500">auto</span>}
                           </td>
                           <td className="px-1 py-1">
-                            <input
-                              type="number"
-                              value={value}
-                              onChange={e => updateSimValue(r.code, field, parseFloat(e.target.value) || 0)}
-                              className={`w-full rounded border px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300 ${isParam ? "border-gray-200 bg-gray-50/50" : "border-gray-200"}`}
-                              placeholder="0"
-                            />
+                            {isCalc ? (
+                              <input
+                                type="text"
+                                value="— calcul —"
+                                disabled
+                                className="w-full rounded border border-gray-200 bg-gray-100 px-1 py-0.5 text-right text-xs text-gray-400 italic"
+                              />
+                            ) : (
+                              <input
+                                type="number"
+                                value={value}
+                                onChange={e => updateSimValue(r.code, field, parseFloat(e.target.value) || 0)}
+                                className={`w-full rounded border px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300 ${isParam ? "border-gray-200 bg-gray-50/50" : "border-gray-200"}`}
+                                placeholder="0"
+                              />
+                            )}
                           </td>
                           <td className="px-1 py-1 text-center">
-                            <span className={`rounded px-1 py-0.5 text-[8px] font-medium ${valueTypeColor[vtype]}`}>
-                              {vtype}
+                            <span className={`rounded px-1 py-0.5 text-[8px] font-medium ${isCalc ? "bg-amber-100 text-amber-600" : valueTypeColor[vtype]}`}>
+                              {isCalc ? "auto" : vtype}
                             </span>
                           </td>
                           <td className="px-1 py-1">
@@ -495,7 +553,7 @@ export function SimulatorPage() {
             </div>
           )}
           {!selectedEmpId && simRubriques.length > 0 && (
-            <div className="border-t border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700">⚠ Sélectionnez un employé pour calculer</div>
+            <div className="border-t border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700">⚠  Sélectionnez un employé pour calculer</div>
           )}
         </div>
 
@@ -587,7 +645,7 @@ export function SimulatorPage() {
                       <>
                         <tr className="bg-blue-50 border-y border-blue-200">
                           <td colSpan={4} className="px-2 py-1 text-[10px] font-bold text-blue-800">
-                            ① GAINS SOUMIS À COTISATION CNAS ({segments.gainsCotisables.length})
+                            ①  GAINS SOUMIS À COTISATION CNAS ({segments.gainsCotisables.length})
                           </td>
                         </tr>
                         {segments.gainsCotisables.map(l => (
@@ -858,446 +916,21 @@ export function SimulatorPage() {
         onSelect={(emp) => setSelectedEmpId(emp.id)}
         selectedEmpId={selectedEmpId}
       />
-    </div>
-  );
-}
 
-// ============================================================
-// CatalogModal — Modale du catalogue de rubriques (filtres + sélection)
-// ============================================================
-
-function CatalogModal({
-  rubriques,
-  simCodes,
-  onAdd,
-  onClose,
-}: {
-  rubriques: RubriqueMeta[];
-  simCodes: Set<string>;
-  onAdd: (rub: RubriqueMeta) => void;
-  onClose: () => void;
-}) {
-  const [search, setSearch] = useState("");
-  const [filterClasse, setFilterClasse] = useState<string>("");
-  const [filterCalcul, setFilterCalcul] = useState<string>(""); // "" = all, "0" = manuelle, "1" = calculée
-  const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
-
-  const classeLabels: Record<number, string> = {
-    0: "Info/Totaux",
-    1: "Gains",
-    2: "Retenues",
-    3: "Nombre",
-    5: "Taux",
-    7: "Compteur",
-  };
-
-  const filtered = useMemo(() => {
-    const s = search.trim().toLowerCase();
-    return rubriques.filter(r => {
-      if (filterClasse && String(r.classe) !== filterClasse) return false;
-      if (filterCalcul && String(r.calcul) !== filterCalcul) return false;
-      if (!s) return true;
-      return r.code.includes(s) || r.libelle.toLowerCase().includes(s);
-    });
-  }, [rubriques, search, filterClasse, filterCalcul]);
-
-  const toggleSelect = (code: string) => {
-    setSelectedCodes(prev => {
-      const next = new Set(prev);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
-      return next;
-    });
-  };
-
-  const addSelected = () => {
-    for (const code of selectedCodes) {
-      const rub = rubriques.find(r => r.code === code);
-      if (rub && !simCodes.has(code)) onAdd(rub);
-    }
-    setSelectedCodes(new Set());
-  };
-
-  const addAllFiltered = () => {
-    for (const rub of filtered) {
-      if (!simCodes.has(rub.code)) onAdd(rub);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div
-        className="flex max-h-[85vh] w-[900px] max-w-[95vw] flex-col rounded-2xl bg-white shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
-          <div className="flex items-center gap-2">
-            <Search className="h-5 w-5 text-blue-600" />
-            <h2 className="text-lg font-bold text-gray-900">Catalogue des Rubriques</h2>
-            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">{rubriques.length}</span>
-          </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Filtres */}
-        <div className="border-b border-gray-100 px-5 py-3 space-y-2">
-          <div className="flex items-center gap-2">
-            <Search className="h-4 w-4 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Recherche par code ou libellé..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300"
-              autoFocus
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Filtre par classe */}
-            <span className="text-xs text-gray-400">Classe:</span>
-            <button onClick={() => setFilterClasse("")} className={`rounded px-2 py-0.5 text-xs ${!filterClasse ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Toutes</button>
-            {[0, 1, 2, 3, 5, 7].map(c => (
-              <button key={c} onClick={() => setFilterClasse(String(c))} className={`rounded px-2 py-0.5 text-xs ${filterClasse === String(c) ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-                {classeLabels[c] || `Cl.${c}`}
-              </button>
-            ))}
-            {/* Filtre par type */}
-            <span className="ml-3 text-xs text-gray-400">Type:</span>
-            <button onClick={() => setFilterCalcul("")} className={`rounded px-2 py-0.5 text-xs ${!filterCalcul ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Tous</button>
-            <button onClick={() => setFilterCalcul("0")} className={`rounded px-2 py-0.5 text-xs ${filterCalcul === "0" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Manuelles</button>
-            <button onClick={() => setFilterCalcul("1")} className={`rounded px-2 py-0.5 text-xs ${filterCalcul === "1" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Calculées</button>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-400">{filtered.length} rubrique(s) trouvée(s)</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={addAllFiltered}
-                className="rounded-lg border border-gray-300 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
-              >
-                Tout ajouter ({filtered.filter(r => !simCodes.has(r.code)).length})
-              </button>
-              {selectedCodes.size > 0 && (
-                <button
-                  onClick={addSelected}
-                  className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
-                >
-                  Ajouter ({selectedCodes.size})
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Tableau des rubriques */}
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-gray-50 text-gray-400 text-xs">
-              <tr>
-                <th className="px-3 py-2 text-left font-normal w-8">
-                  <input
-                    type="checkbox"
-                    checked={filtered.length > 0 && filtered.every(r => selectedCodes.has(r.code))}
-                    onChange={e => {
-                      if (e.target.checked) {
-                        setSelectedCodes(new Set(filtered.map(r => r.code)));
-                      } else {
-                        setSelectedCodes(new Set());
-                      }
-                    }}
-                    className="rounded"
-                  />
-                </th>
-                <th className="px-3 py-2 text-left font-normal w-12">Code</th>
-                <th className="px-3 py-2 text-left font-normal">Libellé</th>
-                <th className="px-3 py-2 text-left font-normal w-20">Classe</th>
-                <th className="px-3 py-2 text-left font-normal w-20">Type</th>
-                <th className="px-3 py-2 text-left font-normal w-32">Formule</th>
-                <th className="px-3 py-2 text-center font-normal w-16">Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(rub => {
-                const inSim = simCodes.has(rub.code);
-                const isSelected = selectedCodes.has(rub.code);
-                return (
-                  <tr
-                    key={rub.code}
-                    className={`border-b border-gray-50 hover:bg-blue-50/30 ${isSelected ? "bg-blue-50/50" : ""} ${inSim ? "opacity-50" : ""}`}
-                  >
-                    <td className="px-3 py-1.5">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleSelect(rub.code)}
-                        disabled={inSim}
-                        className="rounded"
-                      />
-                    </td>
-                    <td className="px-3 py-1.5 font-mono text-gray-500">{rub.code}</td>
-                    <td className="px-3 py-1.5 text-gray-700">{rub.libelle}</td>
-                    <td className="px-3 py-1.5">
-                      <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
-                        {classeLabels[rub.classe] || `Cl.${rub.classe}`}
-                      </span>
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] ${rub.calcul === 1 ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
-                        {rub.calcul === 1 ? "Calculée" : "Manuelle"}
-                      </span>
-                    </td>
-                    <td className="px-3 py-1.5 font-mono text-[10px] text-gray-400 truncate max-w-[120px]" title={rub.formule || ""}>
-                      {rub.formule || "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-center">
-                      {inSim ? (
-                        <span className="text-[10px] text-green-600 font-medium">✓ Dans sim</span>
-                      ) : (
-                        <button
-                          onClick={() => onAdd(rub)}
-                          className="rounded px-2 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100"
-                        >
-                          + Ajouter
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="py-8 text-center text-gray-400">Aucune rubrique trouvée</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AllLinesCollapse({ lines }: { lines: CalcLine[] }) {
-  const [open, setOpen] = useState(false);
-  const sorted = [...lines].filter(l => l.amount !== 0).sort((a, b) => Number(a.code) - Number(b.code));
-  return (
-    <div className="mt-4">
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700">
-        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        Toutes les lignes ({sorted.length})
-      </button>
-      {open && (
-        <div className="mt-1 max-h-60 overflow-y-auto rounded border border-gray-100">
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 bg-gray-50 text-gray-400">
-              <tr>
-                <th className="px-2 py-1 text-left font-normal">Code</th>
-                <th className="px-2 py-1 text-left font-normal">Libellé</th>
-                <th className="px-2 py-1 text-right font-normal">Classe</th>
-                <th className="px-2 py-1 text-right font-normal">Montant</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map(l => (
-                <tr key={l.code} className="border-b border-gray-50">
-                  <td className="px-2 py-0.5 font-mono text-gray-400">{l.code}</td>
-                  <td className="px-2 py-0.5 text-gray-700">{l.libelle}</td>
-                  <td className="px-2 py-0.5 text-right text-gray-400">{l.classe}</td>
-                  <td className="px-2 py-0.5 text-right font-medium text-gray-900">{formatCurrency(l.amount)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {/* Save Modal */}
+      {showSaveModal && (
+        <SaveProfileModal
+          simRubriques={simRubriques}
+          selectedEmp={selectedEmp ?? null}
+          postes={postes}
+          saving={saving}
+          saveMsg={saveMsg}
+          onSaveToPoste={saveToPoste}
+          onSaveToEmployee={saveToEmployee}
+          onSaveAsNewPoste={saveAsNewPoste}
+          onClose={() => setShowSaveModal(false)}
+        />
       )}
     </div>
   );
 }
-
-// ============================================================
-// TValuesDisplay — Affiche les variables système T[]
-// ============================================================
-
-const tLabels: Record<string, string> = {
-  "1": "Cotisable (mensuel)",
-  "3": "Total gains",
-  "4": "Total retenues",
-  "7": "Salaire base (R001)",
-  "9": "Jours/mois",
-  "10": "Heures/mois",
-  "15": "Ratio travail normal",
-  "16": "Ratio heures supp",
-  "17": "Ratio nuit/weekend",
-  "40": "Flag exonération IRG",
-  "41": "Imposable régul",
-  "43": "Imposable mensuel",
-  "47": "Mutuelle multiplier",
-  "51": "Imposable 10%",
-  "52": "Salaire brut",
-  "53": "Cotisable 10%",
-  "57": "Cotisable régul",
-  "58": "Cotisable pour IRG",
-  "76": "Prorata cotisable",
-  "77": "CACOBATH coefficient",
-  "78": "Heures/jour",
-};
-
-const tCategories: { title: string; keys: string[]; color: string }[] = [
-  { title: "Bases de calcul", keys: ["1", "43", "52", "58"], color: "blue" },
-  { title: "Totaux", keys: ["3", "4", "7"], color: "green" },
-  { title: "Temps de travail", keys: ["9", "10", "15", "16", "17", "78"], color: "amber" },
-  { title: "Cotisations & IRG", keys: ["40", "41", "47", "51", "53", "57", "76", "77"], color: "purple" },
-];
-
-function TValuesDisplay({ tValues }: { tValues: Record<string, number> }) {
-  const colorMap: Record<string, string> = {
-    blue: "border-blue-200 bg-blue-50/30 text-blue-900",
-    green: "border-green-200 bg-green-50/30 text-green-900",
-    amber: "border-amber-200 bg-amber-50/30 text-amber-900",
-    purple: "border-purple-200 bg-purple-50/30 text-purple-900",
-  };
-  const headerColorMap: Record<string, string> = {
-    blue: "bg-blue-100/60 text-blue-800 border-blue-200",
-    green: "bg-green-100/60 text-green-800 border-green-200",
-    amber: "bg-amber-100/60 text-amber-800 border-amber-200",
-    purple: "bg-purple-100/60 text-purple-800 border-purple-200",
-  };
-  // Collect all keys present in tValues
-  const allKeys = Object.keys(tValues).sort((a, b) => Number(a) - Number(b));
-  const categorizedKeys = new Set(tCategories.flatMap(c => c.keys));
-  const uncategorized = allKeys.filter(k => !categorizedKeys.has(k));
-
-  return (
-    <div className="mt-1 rounded-lg border border-gray-200 bg-white overflow-hidden">
-      <table className="w-full text-[10px]">
-        <tbody>
-          {tCategories.map(cat => {
-            const present = cat.keys.filter(k => k in tValues);
-            if (present.length === 0) return null;
-            return (
-              <Fragment key={cat.title}>
-                <tr className={`border-y ${headerColorMap[cat.color]}`}>
-                  <td colSpan={3} className="px-2 py-1 font-bold">
-                    {cat.title}
-                  </td>
-                </tr>
-                {present.map(key => (
-                  <tr key={key} className="border-b border-gray-50">
-                    <td className="px-2 py-0.5 font-mono text-gray-400 w-12">T[{key}]</td>
-                    <td className="px-2 py-0.5 text-gray-600">{tLabels[key] || "—"}</td>
-                    <td className="px-2 py-0.5 text-right font-semibold text-gray-900 whitespace-nowrap">
-                      {Number.isInteger(tValues[key]) ? tValues[key] : tValues[key].toFixed(4)}
-                    </td>
-                  </tr>
-                ))}
-              </Fragment>
-            );
-          })}
-          {uncategorized.length > 0 && (
-            <Fragment>
-              <tr className="border-y bg-gray-100 text-gray-600">
-                <td colSpan={3} className="px-2 py-1 font-bold">Autres</td>
-              </tr>
-              {uncategorized.map(key => (
-                <tr key={key} className="border-b border-gray-50">
-                  <td className="px-2 py-0.5 font-mono text-gray-400 w-12">T[{key}]</td>
-                  <td className="px-2 py-0.5 text-gray-600">{tLabels[key] || "—"}</td>
-                  <td className="px-2 py-0.5 text-right font-semibold text-gray-900 whitespace-nowrap">
-                    {Number.isInteger(tValues[key]) ? tValues[key] : tValues[key].toFixed(4)}
-                  </td>
-                </tr>
-              ))}
-            </Fragment>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ============================================================
-// CalcChainDisplay — Affiche la chaîne de calcul avec formules résolues
-// ============================================================
-
-function CalcChainDisplay({ lines }: { lines: CalcLine[] }) {
-  // Only show lines with non-zero amount OR input lines with a value
-  // Exclude classe 5 (taux/paramètres de calcul) and classe 7 (infos système) from the chain
-  // to keep the display focused on gains and retenues
-  const sorted = [...lines]
-    .filter(l => l.amount !== 0 && l.classe !== 5 && l.classe !== 7)
-    .sort((a, b) => Number(a.code) - Number(b.code));
-
-  // Group by category
-  const gains = sorted.filter(l => l.classe === 1 && l.amount > 0);
-  const retenues = sorted.filter(l => l.classe === 2 || (l.classe === 1 && l.amount < 0));
-  const autres = sorted.filter(l => l.classe === 0 || l.classe === 3 || l.classe === 4);
-
-  const renderRow = (l: CalcLine) => {
-    const typeLabel = l.is_input
-      ? "SAISI"
-      : l.formule
-        ? "CALCULÉ"
-        : "MANUEL";
-    const typeColor = l.is_input
-      ? "text-blue-600 bg-blue-50"
-      : l.formule
-        ? "text-gray-500 bg-gray-100"
-        : "text-purple-600 bg-purple-50";
-    return (
-      <tr key={l.code} className="border-b border-gray-50 hover:bg-blue-50/30">
-        <td className="px-2 py-0.5 font-mono text-gray-400">R{l.code}</td>
-        <td className="px-2 py-0.5 text-gray-700 truncate max-w-[120px]">{l.libelle}</td>
-        <td className="px-2 py-0.5">
-          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${typeColor}`}>
-            {typeLabel}
-          </span>
-        </td>
-        <td className="px-2 py-0.5 font-mono text-[10px] text-gray-400 truncate max-w-[200px]">
-          {l.formule || "—"}
-        </td>
-        <td className="px-2 py-0.5 text-right font-medium text-gray-900">
-          {formatCurrency(l.amount)}
-        </td>
-      </tr>
-    );
-  };
-
-  return (
-    <div className="mt-1 max-h-80 overflow-y-auto rounded-lg border border-gray-200">
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-gray-50 text-gray-400">
-          <tr>
-            <th className="px-2 py-1 text-left font-normal w-10">Code</th>
-            <th className="px-2 py-1 text-left font-normal">Libellé</th>
-            <th className="px-2 py-1 text-left font-normal w-32">Type</th>
-            <th className="px-2 py-1 text-left font-normal">Formule</th>
-            <th className="px-2 py-1 text-right font-normal w-24">Montant</th>
-          </tr>
-        </thead>
-        <tbody>
-          {gains.length > 0 && (
-            <>
-              <tr><td colSpan={5} className="bg-green-50/50 px-2 py-1 text-[10px] font-bold text-green-700 uppercase">Gains ({gains.length})</td></tr>
-              {gains.map(renderRow)}
-            </>
-          )}
-          {retenues.length > 0 && (
-            <>
-              <tr><td colSpan={5} className="bg-red-50/50 px-2 py-1 text-[10px] font-bold text-red-700 uppercase">Retenues ({retenues.length})</td></tr>
-              {retenues.map(renderRow)}
-            </>
-          )}
-          {autres.length > 0 && (
-            <>
-              <tr><td colSpan={5} className="bg-gray-50 px-2 py-1 text-[10px] font-bold text-gray-600 uppercase">Autres ({autres.length})</td></tr>
-              {autres.map(renderRow)}
-            </>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-

@@ -45,6 +45,59 @@ fn find_file(folder: &str, name: &str) -> Option<String> {
     None
 }
 
+/// Copy all .DTA and .DBT files from the source folder to a temp directory.
+/// This avoids sharing violations when PCPAIE2014 has the files locked.
+/// Uses Windows-specific copy semantics that can bypass some locks.
+fn copy_dta_files(
+    src_folder: &str,
+    dest_folder: &std::path::Path,
+    progress: &Arc<impl Fn(&str, &str, usize, usize, &str, f64) + Send + Sync + 'static>,
+) -> Result<String, String> {
+    std::fs::create_dir_all(dest_folder).map_err(|e| e.to_string())?;
+
+    let src = std::path::Path::new(src_folder);
+    let mut copied = 0usize;
+    let mut failed = Vec::new();
+
+    let entries = std::fs::read_dir(src).map_err(|e| e.to_string())?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let name_lower = name.to_lowercase();
+
+        // Only copy .DTA and .DBT files
+        if !name_lower.ends_with(".dta") && !name_lower.ends_with(".dbt") {
+            continue;
+        }
+
+        let dest_path = dest_folder.join(&name);
+        match std::fs::copy(&path, &dest_path) {
+            Ok(_) => copied += 1,
+            Err(e) => {
+                // If copy fails (file locked), try reading bytes and writing manually
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        match std::fs::write(&dest_path, &bytes) {
+                            Ok(_) => copied += 1,
+                            Err(e2) => failed.push(format!("{}: {}", name, e2)),
+                        }
+                    }
+                    Err(e2) => failed.push(format!("{}: {} (copy: {})", name, e2, e)),
+                }
+            }
+        }
+    }
+
+    if copied == 0 {
+        return Err(format!("No .DTA files could be copied. Errors: {}", failed.join("; ")));
+    }
+
+    progress("copy", "files", copied, copied, &format!("{} fichiers copiés", copied), 0.0);
+
+    Ok(dest_folder.to_string_lossy().to_string())
+}
+
 /// Open a separate SQLite connection for parallel import work.
 /// Uses WAL mode, 30s busy_timeout, and disables FK enforcement during import.
 fn open_import_conn(db_path: &str) -> Result<Connection, String> {
@@ -67,6 +120,19 @@ pub fn import_native_pcpaie(
     let db_path = app_conn
         .query_row("PRAGMA database_list", [], |r| r.get::<_, String>(2))
         .unwrap_or_else(|_| "hamtech.db".to_string());
+
+    // Copy DTA files to a temp directory to avoid file locking issues
+    // (e.g. when PCPAIE2014 is running and has the files open exclusively).
+    let temp_dir = std::env::temp_dir().join(format!("pcpaie_import_{}", std::process::id()));
+    let work_folder = match copy_dta_files(folder_path, &temp_dir, &progress) {
+        Ok(p) => p,
+        Err(e) => {
+            // If copy fails, fall back to the original folder (might work if files aren't locked)
+            eprintln!("Warning: could not copy DTA files to temp dir: {}. Using original folder.", e);
+            folder_path.to_string()
+        }
+    };
+    let folder_path = &work_folder;
 
     let mut errors = Vec::new();
 
@@ -337,6 +403,9 @@ pub fn import_native_pcpaie(
     progress("phase5", "cleanup", 1, 1, "DB nettoyée", 99.5);
 
     progress("phase5", "done", 1, 1, "Import terminé", 100.0);
+
+    // Clean up temp directory
+    let _ = std::fs::remove_dir_all(&temp_dir);
 
     Ok(ImportResult {
         employees: employees_count,

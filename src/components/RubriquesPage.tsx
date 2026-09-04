@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { api } from "../lib/api";
 import {
-  Search, Save, X, Edit2, Trash2, Loader2, Calculator,
+  Search, Save, X, Edit2, Trash2, Loader2,
   Plus, FlaskConical, AlertCircle, CheckCircle2, Settings, ListChecks,
 } from "lucide-react";
 
@@ -60,7 +60,7 @@ export function RubriquesPage() {
     setLoading(true);
     try {
       const r = await api.getRubriques();
-      setRubriques(r as Rubrique[]);
+      setRubriques(r as unknown as Rubrique[]);
     } catch (e) {
       console.error(e);
     } finally {
@@ -135,7 +135,7 @@ export function RubriquesPage() {
     setTestResult(null);
     try {
       const result = await api.testRubriqueFormula(code, formule);
-      setTestResult({ code, ...result });
+      setTestResult({ ...result });
     } catch (e) {
       setTestResult({ code, success: false, error: String(e) });
     } finally {
@@ -510,19 +510,10 @@ function SalarySettingsPanel({ rubriques }: { rubriques: RubriqueRef[] }) {
     }
   };
 
-  // Helper to find rubrique by code
-  const findRub = (code: string) => rubriques.find(r => r.code === code);
-  const rubLabel = (code: string) => {
-    const r = findRub(code);
-    return r?.libelle ? `— ${r.libelle}` : "";
-  };
-
   // Rubriques cotisables (is_secu_s = 1)
   const cotisables = rubriques.filter(r => r.is_secu_s === 1);
   // Rubriques imposables (is_impos = 1)
   const imposables = rubriques.filter(r => r.is_impos === 1);
-  // Rubriques brut (is_brut = 1)
-  const bruts = rubriques.filter(r => r.is_brut === 1);
   // Rubriques total (is_total = 1)
   const totals = rubriques.filter(r => r.is_total === 1);
 

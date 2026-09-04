@@ -28,6 +28,11 @@ audit_*.py
 check_*.py
 test_*.py
 insert_*.py
+dump_*.py
+fix_*.py
+read_*.py
+*_rapport.md
+*_schema_out.txt
 
 # Editor directories and files
 .vscode/*

@@ -5,11 +5,11 @@ import {
   type LookupTablePreview,
 } from "../lib/api";
 import {
-  Settings, Database, SlidersHorizontal, Download, Upload,
+  Settings, Database, SlidersHorizontal, Download,
   Loader2, Save, Check, AlertCircle, Eye, EyeOff,
   Table2, ChevronDown, ChevronRight, Search, RefreshCw, HardDrive,
 } from "lucide-react";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
 type Tab = "mapping" | "preferences" | "data" | "import";
 
@@ -453,7 +453,7 @@ function DataTab() {
 }
 
 function ImportExportTab() {
-  const [action, setAction] = useState<"export" | "import" | null>(null);
+  const [action, setAction] = useState<"export" | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -471,24 +471,11 @@ function ImportExportTab() {
     finally { setAction(null); }
   };
 
-  const handleImport = async () => {
-    setAction("import"); setResult(null); setError(null);
-    try {
-      const folder = await openDialog({ directory: true });
-      if (!folder || Array.isArray(folder)) { setAction(null); return; }
-      const folderPath = typeof folder === "string" ? folder : (folder as { path?: string }).path;
-      if (!folderPath) { setAction(null); return; }
-      await api.importPcpaieFolder(folderPath);
-      setResult("Dossier PCPAIE importé avec succès");
-    } catch (e) { setError(String(e)); }
-    finally { setAction(null); }
-  };
-
   return (
     <div className="rounded-lg border border-gray-200 p-6">
-      <h3 className="text-sm font-semibold text-gray-700">Import / Export</h3>
+      <h3 className="text-sm font-semibold text-gray-700">Export de la base</h3>
       <p className="mt-2 text-sm text-gray-500">
-        Exporter ou importer les données de l'application.
+        Exporter une sauvegarde complète de la base de données active au format SQLite.
       </p>
 
       {result && (
@@ -517,19 +504,13 @@ function ImportExportTab() {
             Exporter
           </button>
         </div>
-        <div className="flex items-center justify-between rounded-lg bg-gray-50 p-3">
+        <div className="flex items-center justify-between rounded-lg bg-blue-50 p-3">
           <div>
-            <p className="text-sm font-medium text-gray-700">Importer un dossier PCPAIE</p>
-            <p className="text-xs text-gray-500">Réimporter depuis un dossier .DTA</p>
+            <p className="text-sm font-medium text-blue-700">Importer un dossier PCPAIE</p>
+            <p className="text-xs text-blue-500">
+              La gestion des dossiers (import, bascule, suppression) se fait depuis le Tableau de bord → Base de données
+            </p>
           </div>
-          <button
-            onClick={handleImport}
-            disabled={action !== null}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {action === "import" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-            Importer
-          </button>
         </div>
       </div>
     </div>

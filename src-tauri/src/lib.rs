@@ -1,6 +1,7 @@
 pub mod calculator;
 mod db;
 mod dbf;
+mod dossiers;
 mod import;
 mod native_import;
 mod pointeuse;
@@ -72,7 +73,8 @@ use tauri::{Manager, State};
 
 struct AppState {
     conn: Mutex<Connection>,
-    db_path: String,
+    db_path: Mutex<String>,
+    app_data_dir: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -121,7 +123,7 @@ async fn import_pcpaie_db(
     state: State<'_, AppState>,
     pcpaie_path: String,
 ) -> Result<ImportResult, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
         import_pcpaie(&conn, &pcpaie_path, |_| {})
@@ -136,7 +138,7 @@ async fn import_pointeuse_data(
     user_dat_path: String,
     attlog_paths: Vec<String>,
 ) -> Result<PointeuseImportResult, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
         import_pointeuse(&conn, &user_dat_path, &attlog_paths)
@@ -180,6 +182,7 @@ struct EmployeeSummary {
     sit_fam: Option<String>,
     categorie: Option<String>,
     unite: Option<String>,
+    poste_id: Option<i64>,
     total_count: i64,
 }
 
@@ -314,6 +317,7 @@ fn get_employees(
         r#"SELECT e.id, e.matricule, e.nom, e.prenom, e.actif, e.pointeuse_pin,
            s.name, e.section, e.structure, e.affectatio,
            p.name, p.fnc_code, e.sexe, e.sit_fam, e.categorie, e.unite,
+           e.poste_id,
            COUNT(*) OVER () as total_count
            FROM employees e
            LEFT JOIN shifts s ON e.shift_id = s.id
@@ -348,7 +352,8 @@ fn get_employees(
                 sit_fam: row.get(13)?,
                 categorie: row.get(14)?,
                 unite: row.get(15)?,
-                total_count: row.get(16)?,
+                poste_id: row.get::<_, Option<i64>>(16)?,
+                total_count: row.get(17)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -437,7 +442,7 @@ async fn get_employee_detail(
     state: State<'_, AppState>,
     employee_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
         let mut row = conn
@@ -934,7 +939,7 @@ async fn calculate_employee_salary(
     period: String,
     input_values: HashMap<String, (f64, f64)>,
 ) -> Result<CalcResult, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
         calculate_salary(&conn, employee_id, &period, &input_values)
@@ -1273,7 +1278,7 @@ struct Bonus {
 
 #[tauri::command]
 async fn get_bonuses(state: State<'_, AppState>) -> Result<Vec<Bonus>, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
     let mut stmt = conn
@@ -1752,7 +1757,7 @@ fn get_attendance(
 // Rubriques
 #[tauri::command]
 async fn get_rubriques(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
     let mut stmt = conn
@@ -2120,7 +2125,7 @@ async fn calculate_all_salaries(
     state: State<'_, AppState>,
     period: String,
 ) -> Result<Vec<CalcResult>, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
         let emp_ids: Vec<i64> = {
@@ -2170,7 +2175,7 @@ async fn get_all_salary_history(
     state: State<'_, AppState>,
     period: Option<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA busy_timeout=5000;").ok();
@@ -2901,14 +2906,18 @@ fn get_poste_detail(state: State<AppState>, poste_id: i64) -> Result<serde_json:
         })
         .map_err(|e| e.to_string())?;
 
-    // Rubriques for this poste (régime indemnitaire = gains only), joined with rubriques table
+    // Rubriques for this poste (ALL classes), joined with rubriques table
+    // Handle both 'R001' (old format) and '001' (new format) in rubrique_code
     let mut stmt = conn
         .prepare(r#"SELECT pr.rubrique_code, pr.default_value, pr.is_fixed, pr.sort_order,
-                    r.libelle, r.classe, r.manuelle, r.is_brut
+                    r.libelle, r.classe, r.calcul, r.manuelle, r.is_brut, r.formule
                     FROM poste_rubriques pr
-                    LEFT JOIN rubriques r ON r.code = SUBSTR(pr.rubrique_code, 2)
-                    WHERE pr.poste_id=? AND (r.is_brut IN (1, 6) OR r.is_brut IS NULL)
-                    ORDER BY pr.sort_order"#)
+                    LEFT JOIN rubriques r ON r.code = CASE
+                        WHEN SUBSTR(pr.rubrique_code, 1, 1) = 'R' THEN SUBSTR(pr.rubrique_code, 2)
+                        ELSE pr.rubrique_code
+                    END
+                    WHERE pr.poste_id=?
+                    ORDER BY pr.sort_order, pr.rubrique_code"#)
         .map_err(|e| e.to_string())?;
     let rub_rows = stmt.query_map([poste_id], |row| {
         Ok(serde_json::json!({
@@ -2918,11 +2927,10 @@ fn get_poste_detail(state: State<AppState>, poste_id: i64) -> Result<serde_json:
             "sort_order": row.get::<_, Option<i64>>(3)?.unwrap_or(0),
             "libelle": row.get::<_, Option<String>>(4)?,
             "classe": row.get::<_, Option<f64>>(5)?,
-            "manuelle": row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
-            "is_brut": row.get::<_, Option<f64>>(7)?,
-            "libelle": row.get::<_, Option<String>>(4)?,
-            "classe": row.get::<_, Option<f64>>(5)?,
-            "manuelle": row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
+            "calcul": row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+            "manuelle": row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
+            "is_brut": row.get::<_, Option<i64>>(8)?,
+            "formule": row.get::<_, Option<String>>(9)?,
         }))
     }).map_err(|e| e.to_string())?;
     let mut rubriques = Vec::new();
@@ -3071,8 +3079,8 @@ fn get_database_stats(state: State<AppState>) -> Result<serde_json::Value, Strin
         stats.insert(t.to_string(), serde_json::Value::from(count));
     }
     // DB file size
-    let db_path = &state.db_path;
-    if let Ok(meta) = std::fs::metadata(db_path) {
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
+    if let Ok(meta) = std::fs::metadata(&db_path) {
         stats.insert("db_size_bytes".into(), serde_json::Value::from(meta.len() as i64));
     }
     Ok(serde_json::Value::Object(stats))
@@ -3132,8 +3140,8 @@ fn get_employee_current_rubriques(state: State<AppState>, employee_id: i64) -> R
             (0.0, "poste")
         };
 
-        // Get libelle from rubriques table
-        let numeric_code: String = code.chars().skip(1).collect();
+        // Get libelle from rubriques table (handle both 'R001' and '001' formats)
+        let numeric_code: String = if code.starts_with('R') { code[1..].to_string() } else { code.clone() };
         let libelle: Option<String> = conn
             .query_row("SELECT libelle FROM rubriques WHERE code=?", [&numeric_code], |r| r.get(0))
             .ok()
@@ -3192,7 +3200,7 @@ fn get_employee_salary_history(
     // Get libelles
     let mut rubriques_meta: Vec<serde_json::Value> = Vec::new();
     for code in &all_rubriques {
-        let numeric: String = code.chars().skip(1).collect();
+        let numeric: String = if code.starts_with('R') { code[1..].to_string() } else { code.clone() };
         let libelle: Option<String> = conn
             .query_row("SELECT libelle FROM rubriques WHERE code=?", [&numeric], |r| r.get(0))
             .ok()
@@ -3207,7 +3215,7 @@ fn get_employee_salary_history(
     let mut series: Vec<serde_json::Value> = Vec::new();
     for code in &all_rubriques {
         let data: Vec<Option<f64>> = periods.iter().map(|p| values_by_period.get(p).and_then(|m| m.get(code).copied())).collect();
-        let numeric: String = code.chars().skip(1).collect();
+        let numeric: String = if code.starts_with('R') { code[1..].to_string() } else { code.clone() };
         let libelle: Option<String> = conn
             .query_row("SELECT libelle FROM rubriques WHERE code=?", [&numeric], |r| r.get(0))
             .ok()
@@ -3533,7 +3541,7 @@ fn compute_weekday_from_date(date_str: &str) -> &'static str {
 
 #[tauri::command]
 async fn get_pre_calc_summary(state: State<'_, AppState>, employee_id: i64, period: String) -> Result<serde_json::Value, String> {
-    let db_path = state.db_path.clone();
+    let db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
 
@@ -3931,124 +3939,302 @@ struct ImportProgressEvent {
 /// Import all PCPAIE data from a folder: auto-detect SQLite DB or native .DTA files,
 /// plus pointeuse files, then import everything.
 /// Emits "import-progress" events with real record counts during import.
+///
+/// `mode` controls how the import interacts with existing data:
+///   - `"merge"`: import into the current active dossier's DB (overwrites on conflict).
+///   - `"separate"`: create a new DB file for this dossier, import into it, then switch.
+///   - `"replace"`: wipe the current DB and reimport fresh data.
 #[tauri::command]
 async fn import_pcpaie_folder(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
     folder_path: String,
+    mode: Option<String>,
 ) -> Result<FolderImportResult, String> {
-    let db_path = state.db_path.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+    let app_data_dir = state.app_data_dir.clone();
+    let current_db_path = state.db_path.lock().map_err(|e| e.to_string())?.clone();
+    let mode = mode.unwrap_or_else(|| "merge".to_string());
 
-        // 1. Scan the folder for importable files
-        let scan = scan_pcpaie_dir_internal(&folder_path)?;
-
-        // 2. Import PCPAIE data — either from SQLite DB or native .DTA files
-        let (pcpaie_result, pcpaie_db_path) = if let Some(db_path) = &scan.pcpaie_db {
-            // SQLite database found — emit basic progress
-            {
-                use tauri::Emitter;
-                let _ = app_handle.emit("import-progress", ImportProgressEvent {
-                    step: "rubriques".to_string(),
-                    current: 0, total: 0,
-                    message: "Import SQLite...".to_string(),
-                    overall_percent: 0.0,
-                });
+    // Determine the target DB path and whether this is a new separate dossier.
+    let mut registry = dossiers::load_registry(&app_data_dir)?;
+    let new_dossier_id: Option<i64> = match mode.as_str() {
+        "separate" => {
+            let id = dossiers::next_dossier_id(&registry);
+            Some(id)
+        }
+        "replace" => {
+            // Delete the current DB file so init_db creates a fresh schema
+            let _ = std::fs::remove_file(&current_db_path);
+            for ext in &["-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{}", current_db_path, ext));
             }
-            let result = import_pcpaie(&conn, db_path, |_| {})?;
+            None
+        }
+        _ => None, // merge
+    };
+
+    let target_db_path = match new_dossier_id {
+        Some(id) => dossiers::dossier_db_path(&app_data_dir, id),
+        None => current_db_path.clone(),
+    };
+
+    let target_db = target_db_path.clone();
+    let folder = folder_path.clone();
+    let handle = app_handle.clone();
+
+    let result: Result<(FolderImportResult, Connection), String> =
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = db::init_db(&target_db).map_err(|e| e.to_string())?;
+
+            // 1. Scan the folder for importable files
+            let scan = scan_pcpaie_dir_internal(&folder)?;
+
+            // 2. Import PCPAIE data — either from SQLite DB or native .DTA files
+            let (pcpaie_result, pcpaie_db_path) = if let Some(db_path) = &scan.pcpaie_db {
+                {
+                    use tauri::Emitter;
+                    let _ = handle.emit("import-progress", ImportProgressEvent {
+                        step: "rubriques".to_string(),
+                        current: 0, total: 0,
+                        message: "Import SQLite...".to_string(),
+                        overall_percent: 0.0,
+                    });
+                }
+                let result = import_pcpaie(&conn, db_path, |_| {})?;
+                {
+                    use tauri::Emitter;
+                    let _ = handle.emit("import-progress", ImportProgressEvent {
+                        step: "done".to_string(),
+                        current: 1, total: 1,
+                        message: "Import SQLite terminé".to_string(),
+                        overall_percent: 100.0,
+                    });
+                }
+                (result, db_path.clone())
+            } else if scan.has_native_files {
+                let handle_clone = handle.clone();
+                let progress_cb = move |_phase: &str, step: &str, current: usize, total: usize, message: &str, overall: f64| {
+                    use tauri::Emitter;
+                    let _ = handle_clone.emit("import-progress", ImportProgressEvent {
+                        step: step.to_string(),
+                        current,
+                        total,
+                        message: message.to_string(),
+                        overall_percent: overall,
+                    });
+                };
+                let result = native_import::import_native_pcpaie(&conn, &folder, progress_cb)?;
+                (result, folder.clone())
+            } else {
+                return Err(
+                    "No PCPAIE data found in the selected folder. Expected either a SQLite database (with RUBRIQUE, PERS0, PAIES tables) or native PCPAIE files (RUBRIQUEX.DTA, PERS0.DTA, etc.).".to_string()
+                );
+            };
+
+            // 3. Import pointeuse data if user.dat and attlog files are present
+            let mut pointeuse_imported = false;
+            let mut pointeuse_users = 0;
+            let mut pointeuse_entries = 0;
+            let mut pointeuse_errors: Vec<String> = Vec::new();
+
+            if let Some(user_dat) = &scan.user_dat {
+                if !scan.attlog_files.is_empty() {
+                    {
+                        use tauri::Emitter;
+                        let _ = handle.emit("import-progress", ImportProgressEvent {
+                            step: "pointeuse".to_string(),
+                            current: 0, total: 0,
+                            message: "Import des données pointeuse...".to_string(),
+                            overall_percent: 95.0,
+                        });
+                    }
+                    match import_pointeuse(&conn, user_dat, &scan.attlog_files) {
+                        Ok(result) => {
+                            pointeuse_imported = true;
+                            pointeuse_users = result.users_imported;
+                            pointeuse_entries = result.attlog_entries;
+                        }
+                        Err(e) => {
+                            pointeuse_errors.push(format!("Pointeuse import failed: {}", e));
+                        }
+                    }
+                } else {
+                    pointeuse_errors.push(
+                        "user.dat found but no attlog*.dat files detected in the folder.".to_string(),
+                    );
+                }
+            }
+
+            // Final event
             {
                 use tauri::Emitter;
-                let _ = app_handle.emit("import-progress", ImportProgressEvent {
+                let _ = handle.emit("import-progress", ImportProgressEvent {
                     step: "done".to_string(),
                     current: 1, total: 1,
-                    message: "Import SQLite terminé".to_string(),
+                    message: "Import terminé".to_string(),
                     overall_percent: 100.0,
                 });
             }
-            (result, db_path.clone())
-        } else if scan.has_native_files {
-            // Native .DTA files — parallel import with real progress
-            // The native_import module calculates overall_percent itself
-            // and calls our callback with (phase, step, current, total, message, overall_percent)
-            let app_handle_clone = app_handle.clone();
-            let progress_cb = move |_phase: &str, step: &str, current: usize, total: usize, message: &str, overall: f64| {
-                use tauri::Emitter;
-                let _ = app_handle_clone.emit("import-progress", ImportProgressEvent {
-                    step: step.to_string(),
-                    current,
-                    total,
-                    message: message.to_string(),
-                    overall_percent: overall,
-                });
+
+            let result = FolderImportResult {
+                pcpaie: pcpaie_result,
+                pointeuse_imported,
+                pointeuse_users,
+                pointeuse_entries,
+                pcpaie_db_path,
+                pointeuse_errors,
             };
 
-            let result = native_import::import_native_pcpaie(&conn, &folder_path, progress_cb)?;
-            (result, folder_path.clone())
+            Ok((result, conn))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let (folder_result, new_conn) = result?;
+
+    // If separate mode: swap the connection and update the registry
+    if let Some(new_id) = new_dossier_id {
+        // Read doss_nom from the newly imported DB
+        let doss_nom_from_db = new_conn
+            .query_row(
+                "SELECT doss_nom FROM company_info WHERE id=1",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
+
+        // If company_info is empty, try to get doss_nom from the scan
+        let doss_nom = if let Some(ref name) = doss_nom_from_db {
+            if !name.trim().is_empty() {
+                name.clone()
+            } else {
+                read_doss_nom_from_dta(&folder_path)
+                    .or_else(|| read_doss_nom_from_sqlite(&folder_path))
+                    .unwrap_or_else(|| format!("Dossier {}", new_id))
+            }
         } else {
-            return Err(
-                "No PCPAIE data found in the selected folder. Expected either a SQLite database (with RUBRIQUE, PERS0, PAIES tables) or native PCPAIE files (RUBRIQUEX.DTA, PERS0.DTA, etc.).".to_string()
+            // company_info empty — read from scan and insert it
+            let scan_name = read_doss_nom_from_dta(&folder_path)
+                .or_else(|| read_doss_nom_from_sqlite(&folder_path))
+                .unwrap_or_else(|| format!("Dossier {}", new_id));
+            // Insert into company_info
+            let _ = new_conn.execute(
+                "INSERT OR REPLACE INTO company_info (id, doss_nom) VALUES (1, ?1)",
+                rusqlite::params![scan_name],
             );
+            scan_name
         };
 
-        // 3. Import pointeuse data if user.dat and attlog files are present
-        let mut pointeuse_imported = false;
-        let mut pointeuse_users = 0;
-        let mut pointeuse_entries = 0;
-        let mut pointeuse_errors: Vec<String> = Vec::new();
+        let emp_count: i64 = new_conn
+            .query_row("SELECT COUNT(*) FROM employees", [], |r| r.get(0))
+            .unwrap_or(0);
 
-        if let Some(user_dat) = &scan.user_dat {
-            if !scan.attlog_files.is_empty() {
-                {
-                    use tauri::Emitter;
-                    let _ = app_handle.emit("import-progress", ImportProgressEvent {
-                        step: "pointeuse".to_string(),
-                        current: 0,
-                        total: 0,
-                        message: "Import des données pointeuse...".to_string(),
-                        overall_percent: 95.0,
-                    });
+        // Swap the connection in AppState
+        {
+            let mut conn_guard = state.conn.lock().map_err(|e| e.to_string())?;
+            *conn_guard = new_conn;
+        }
+        {
+            let mut path_guard = state.db_path.lock().map_err(|e| e.to_string())?;
+            *path_guard = target_db_path.clone();
+        }
+
+        // Update registry
+        registry.dossiers.push(dossiers::DossierInfo {
+            id: new_id,
+            doss_nom: doss_nom.clone(),
+            db_path: target_db_path.clone(),
+            imported_at: chrono::Utc::now().to_rfc3339(),
+            employee_count: emp_count as usize,
+        });
+        registry.active_dossier_id = new_id;
+        dossiers::save_registry(&app_data_dir, &registry)?;
+    } else if mode == "replace" {
+        // Update employee count in registry for the active dossier
+        let emp_count: i64 = new_conn
+            .query_row("SELECT COUNT(*) FROM employees", [], |r| r.get(0))
+            .unwrap_or(0);
+        if let Some(active) = registry.dossiers.iter_mut().find(|d| d.id == registry.active_dossier_id) {
+            active.employee_count = emp_count as usize;
+            // Update doss_nom too
+            if let Ok(nom) = new_conn.query_row(
+                "SELECT doss_nom FROM company_info WHERE id=1",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            ) {
+                if let Some(n) = nom {
+                    active.doss_nom = n;
                 }
-                match import_pointeuse(&conn, user_dat, &scan.attlog_files) {
-                    Ok(result) => {
-                        pointeuse_imported = true;
-                        pointeuse_users = result.users_imported;
-                        pointeuse_entries = result.attlog_entries;
-                    }
-                    Err(e) => {
-                        pointeuse_errors.push(format!("Pointeuse import failed: {}", e));
-                    }
-                }
-            } else {
-                pointeuse_errors.push(
-                    "user.dat found but no attlog*.dat files detected in the folder.".to_string(),
-                );
             }
         }
+        dossiers::save_registry(&app_data_dir, &registry)?;
 
-        // Final event
+        // Swap connection (the old one was dropped when we deleted the file)
         {
-            use tauri::Emitter;
-            let _ = app_handle.emit("import-progress", ImportProgressEvent {
-                step: "done".to_string(),
-                current: 1,
-                total: 1,
-                message: "Import terminé".to_string(),
-                overall_percent: 100.0,
-            });
+            let mut conn_guard = state.conn.lock().map_err(|e| e.to_string())?;
+            *conn_guard = new_conn;
         }
+    } else {
+        // merge mode
+        let emp_count: i64 = new_conn
+            .query_row("SELECT COUNT(*) FROM employees", [], |r| r.get(0))
+            .unwrap_or(0);
+        let doss_nom_from_db = new_conn
+            .query_row(
+                "SELECT doss_nom FROM company_info WHERE id=1",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
 
-        Ok(FolderImportResult {
-            pcpaie: pcpaie_result,
-            pointeuse_imported,
-            pointeuse_users,
-            pointeuse_entries,
-            pcpaie_db_path,
-            pointeuse_errors,
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        let doss_nom = if let Some(ref name) = doss_nom_from_db {
+            if !name.trim().is_empty() {
+                name.clone()
+            } else {
+                read_doss_nom_from_dta(&folder_path)
+                    .or_else(|| read_doss_nom_from_sqlite(&folder_path))
+                    .unwrap_or_else(|| "Dossier".to_string())
+            }
+        } else {
+            let scan_name = read_doss_nom_from_dta(&folder_path)
+                .or_else(|| read_doss_nom_from_sqlite(&folder_path))
+                .unwrap_or_else(|| "Dossier".to_string());
+            let _ = new_conn.execute(
+                "INSERT OR REPLACE INTO company_info (id, doss_nom) VALUES (1, ?1)",
+                rusqlite::params![scan_name],
+            );
+            scan_name
+        };
+
+        if registry.dossiers.is_empty() {
+            // No dossiers in registry yet — this is the first import.
+            // Register the current DB as dossier 1.
+            let new_id = 1;
+            registry.dossiers.push(dossiers::DossierInfo {
+                id: new_id,
+                doss_nom: doss_nom.clone(),
+                db_path: current_db_path.clone(),
+                imported_at: chrono::Utc::now().to_rfc3339(),
+                employee_count: emp_count as usize,
+            });
+            registry.active_dossier_id = new_id;
+        } else if let Some(active) = registry.dossiers.iter_mut().find(|d| d.id == registry.active_dossier_id) {
+            active.employee_count = emp_count as usize;
+            // Update name in case it changed
+            active.doss_nom = doss_nom;
+        }
+        dossiers::save_registry(&app_data_dir, &registry)?;
+
+        // Swap connection to refresh it
+        {
+            let mut conn_guard = state.conn.lock().map_err(|e| e.to_string())?;
+            *conn_guard = new_conn;
+        }
+    }
+
+    Ok(folder_result)
 }
 
 /// Internal (non-command) version of scan_pcpaie_dir for reuse within Rust code.
@@ -4158,6 +4344,537 @@ fn scan_attlog_dir(dir_path: String) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
+// ===== Multi-dossier management =====
+
+/// Result of checking a folder for dossier conflicts before import.
+#[derive(Debug, Serialize, Deserialize)]
+struct DossierConflictCheck {
+    /// The DOSS_NOM found in the scanned folder (empty if not found).
+    scanned_doss_nom: String,
+    /// Whether the scanned folder appears to be a valid PCPAIE folder.
+    is_valid_pcpaie: bool,
+    /// True if the scanned dossier name differs from all existing dossiers.
+    is_new_dossier: bool,
+    /// The id of the existing dossier with the same name, if any.
+    existing_dossier_id: Option<i64>,
+    /// The name of the currently active dossier.
+    active_doss_nom: String,
+    /// All existing dossiers (id + name) for display.
+    existing_dossiers: Vec<dossiers::DossierInfo>,
+}
+
+/// Read DOSS_NOM from a PCPAIE SQLite database file.
+fn read_doss_nom_from_sqlite(db_path: &str) -> Option<String> {
+    let conn = Connection::open(db_path).ok()?;
+    conn.query_row(
+        "SELECT DOSS_NOM FROM DOSSIER LIMIT 1",
+        [],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// Read DOSS_NOM from a native DOSSIER.DTA file.
+/// Copies the file to a temp location first to avoid file locking issues.
+fn read_doss_nom_from_dta(folder_path: &str) -> Option<String> {
+    let dossier_path = std::path::Path::new(folder_path).join("DOSSIER.DTA");
+    if !dossier_path.exists() {
+        return None;
+    }
+    // Try direct read first
+    let read_result = (|| {
+        let mut reader = dbf::DbfReader::open(&dossier_path.to_string_lossy()).ok()?;
+        let record = reader.read_record().ok()??;
+        let name = dbf::get_str(&record, "DOSS_NOM");
+        if name.trim().is_empty() { None } else { Some(name) }
+    })();
+    if read_result.is_some() {
+        return read_result;
+    }
+    // Fallback: copy to temp and read from there
+    let temp_path = std::env::temp_dir().join(format!("dossier_check_{}.DTA", std::process::id()));
+    match std::fs::copy(&dossier_path, &temp_path) {
+        Ok(_) => {
+            let result = (|| {
+                let mut reader = dbf::DbfReader::open(&temp_path.to_string_lossy()).ok()?;
+                let record = reader.read_record().ok()??;
+                let name = dbf::get_str(&record, "DOSS_NOM");
+                if name.trim().is_empty() { None } else { Some(name) }
+            })();
+            let _ = std::fs::remove_file(&temp_path);
+            result
+        }
+        Err(_) => None,
+    }
+}
+
+/// Check whether a PCPAIE folder represents a new or existing dossier.
+#[tauri::command]
+async fn check_dossier_conflict(
+    state: State<'_, AppState>,
+    folder_path: String,
+) -> Result<DossierConflictCheck, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let registry = dossiers::load_registry(&app_data_dir)?;
+
+        // Scan the folder
+        let scan = scan_pcpaie_dir_internal(&folder_path)?;
+        let is_valid = scan.pcpaie_db.is_some() || scan.has_native_files;
+
+        // Extract DOSS_NOM
+        let doss_nom = if let Some(ref db_path) = scan.pcpaie_db {
+            read_doss_nom_from_sqlite(db_path).unwrap_or_default()
+        } else if scan.has_native_files {
+            read_doss_nom_from_dta(&folder_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Check if this dossier name already exists in the registry
+        let existing = dossiers::find_by_name(&registry, &doss_nom);
+        let is_new = doss_nom.is_empty() || existing.is_none();
+        let existing_dossier_id = existing.map(|d| d.id);
+
+        let active_doss_nom = dossiers::get_active(&registry)
+            .map(|d| d.doss_nom.clone())
+            .unwrap_or_default();
+
+        Ok(DossierConflictCheck {
+            scanned_doss_nom: doss_nom,
+            is_valid_pcpaie: is_valid,
+            is_new_dossier: is_new,
+            existing_dossier_id,
+            active_doss_nom,
+            existing_dossiers: registry.dossiers.clone(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// List all registered dossiers.
+#[tauri::command]
+async fn get_dossiers(state: State<'_, AppState>) -> Result<dossiers::DossierRegistry, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        dossiers::load_registry(&app_data_dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Switch the active dossier. This closes the current DB connection and opens
+/// the selected dossier's DB.
+#[tauri::command]
+async fn switch_dossier(
+    state: State<'_, AppState>,
+    dossier_id: i64,
+) -> Result<dossiers::DossierInfo, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    // Load registry outside the conn lock
+    let mut registry = dossiers::load_registry(&app_data_dir)?;
+    let dossier = registry
+        .dossiers
+        .iter()
+        .find(|d| d.id == dossier_id)
+        .cloned()
+        .ok_or("Dossier not found")?;
+
+    // Open the new connection first (outside the lock)
+    let new_conn = db::init_db(&dossier.db_path).map_err(|e| format!("Cannot open DB: {}", e))?;
+
+    // Swap the connection
+    {
+        let mut conn_guard = state.conn.lock().map_err(|e| e.to_string())?;
+        *conn_guard = new_conn;
+    }
+    {
+        let mut path_guard = state.db_path.lock().map_err(|e| e.to_string())?;
+        *path_guard = dossier.db_path.clone();
+    }
+
+    // Update registry
+    registry.active_dossier_id = dossier_id;
+    dossiers::save_registry(&app_data_dir, &registry)?;
+
+    Ok(dossier)
+}
+
+/// Delete a dossier from the registry and optionally delete its DB file.
+#[tauri::command]
+async fn delete_dossier(
+    state: State<'_, AppState>,
+    dossier_id: i64,
+    delete_file: bool,
+) -> Result<(), String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut registry = dossiers::load_registry(&app_data_dir)?;
+        if registry.dossiers.len() <= 1 {
+            return Err("Cannot delete the last remaining dossier".to_string());
+        }
+        if registry.active_dossier_id == dossier_id {
+            return Err("Cannot delete the active dossier. Switch to another first.".to_string());
+        }
+
+        let dossier = registry
+            .dossiers
+            .iter()
+            .find(|d| d.id == dossier_id)
+            .cloned()
+            .ok_or("Dossier not found")?;
+
+        if delete_file {
+            let _ = std::fs::remove_file(&dossier.db_path);
+            // Also remove WAL/SHM
+            for ext in &["-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{}", dossier.db_path, ext));
+            }
+        }
+
+        registry.dossiers.retain(|d| d.id != dossier_id);
+        dossiers::save_registry(&app_data_dir, &registry)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Get detailed statistics for a specific dossier.
+#[tauri::command]
+async fn get_dossier_stats(
+    state: State<'_, AppState>,
+    dossier_id: i64,
+) -> Result<dossiers::DossierStats, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let registry = dossiers::load_registry(&app_data_dir)?;
+        let dossier = registry
+            .dossiers
+            .iter()
+            .find(|d| d.id == dossier_id)
+            .ok_or("Dossier not found")?;
+        dossiers::get_dossier_stats(&dossier.db_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Rename a dossier (updates registry + company_info in the DB).
+#[tauri::command]
+async fn rename_dossier(
+    state: State<'_, AppState>,
+    dossier_id: i64,
+    new_name: String,
+) -> Result<dossiers::DossierInfo, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        dossiers::rename_dossier(&app_data_dir, dossier_id, &new_name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Refresh (re-import) an existing dossier from a PCPAIE folder.
+/// This wipes the dossier's DB and reimports fresh data, keeping the same DB file.
+#[tauri::command]
+async fn refresh_dossier(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    dossier_id: i64,
+    folder_path: String,
+) -> Result<FolderImportResult, String> {
+    let app_data_dir = state.app_data_dir.clone();
+
+    // Load registry and find the dossier
+    let registry = dossiers::load_registry(&app_data_dir)?;
+    let dossier = registry
+        .dossiers
+        .iter()
+        .find(|d| d.id == dossier_id)
+        .ok_or("Dossier not found")?
+        .clone();
+
+    let db_path = dossier.db_path.clone();
+    let folder = folder_path.clone();
+    let handle = app_handle.clone();
+    let is_active = dossier.id == registry.active_dossier_id;
+
+    let result: Result<(FolderImportResult, Connection), String> =
+        tauri::async_runtime::spawn_blocking(move || {
+            // Delete the existing DB file so init_db creates a fresh schema
+            let _ = std::fs::remove_file(&db_path);
+            for ext in &["-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{}", db_path, ext));
+            }
+
+            let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+
+            let scan = scan_pcpaie_dir_internal(&folder)?;
+
+            let (pcpaie_result, pcpaie_db_path) = if let Some(db_path) = &scan.pcpaie_db {
+                {
+                    use tauri::Emitter;
+                    let _ = handle.emit("import-progress", ImportProgressEvent {
+                        step: "rubriques".to_string(),
+                        current: 0, total: 0,
+                        message: "Import SQLite...".to_string(),
+                        overall_percent: 0.0,
+                    });
+                }
+                let result = import_pcpaie(&conn, db_path, |_| {})?;
+                {
+                    use tauri::Emitter;
+                    let _ = handle.emit("import-progress", ImportProgressEvent {
+                        step: "done".to_string(),
+                        current: 1, total: 1,
+                        message: "Import SQLite terminé".to_string(),
+                        overall_percent: 100.0,
+                    });
+                }
+                (result, db_path.clone())
+            } else if scan.has_native_files {
+                let handle_clone = handle.clone();
+                let progress_cb = move |_phase: &str, step: &str, current: usize, total: usize, message: &str, overall: f64| {
+                    use tauri::Emitter;
+                    let _ = handle_clone.emit("import-progress", ImportProgressEvent {
+                        step: step.to_string(),
+                        current,
+                        total,
+                        message: message.to_string(),
+                        overall_percent: overall,
+                    });
+                };
+                let result = native_import::import_native_pcpaie(&conn, &folder, progress_cb)?;
+                (result, folder.clone())
+            } else {
+                return Err("No PCPAIE data found in the selected folder.".to_string());
+            };
+
+            // Import pointeuse if present
+            let mut pointeuse_imported = false;
+            let mut pointeuse_users = 0;
+            let mut pointeuse_entries = 0;
+            let mut pointeuse_errors: Vec<String> = Vec::new();
+
+            if let Some(user_dat) = &scan.user_dat {
+                if !scan.attlog_files.is_empty() {
+                    match import_pointeuse(&conn, user_dat, &scan.attlog_files) {
+                        Ok(r) => {
+                            pointeuse_imported = true;
+                            pointeuse_users = r.users_imported;
+                            pointeuse_entries = r.attlog_entries;
+                        }
+                        Err(e) => {
+                            pointeuse_errors.push(format!("Pointeuse: {}", e));
+                        }
+                    }
+                }
+            }
+
+            {
+                use tauri::Emitter;
+                let _ = handle.emit("import-progress", ImportProgressEvent {
+                    step: "done".to_string(),
+                    current: 1, total: 1,
+                    message: "Rafraîchissement terminé".to_string(),
+                    overall_percent: 100.0,
+                });
+            }
+
+            Ok((FolderImportResult {
+                pcpaie: pcpaie_result,
+                pointeuse_imported,
+                pointeuse_users,
+                pointeuse_entries,
+                pcpaie_db_path,
+                pointeuse_errors,
+            }, conn))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let (folder_result, new_conn) = result?;
+
+    // Update registry with new stats
+    let mut registry = dossiers::load_registry(&app_data_dir)?;
+    let emp_count: i64 = new_conn
+        .query_row("SELECT COUNT(*) FROM employees", [], |r| r.get(0))
+        .unwrap_or(0);
+    if let Some(d) = registry.dossiers.iter_mut().find(|d| d.id == dossier_id) {
+        d.employee_count = emp_count as usize;
+        if let Ok(nom) = new_conn.query_row(
+            "SELECT doss_nom FROM company_info WHERE id=1",
+            [],
+            |r| r.get::<_, Option<String>>(0),
+        ) {
+            if let Some(n) = nom { d.doss_nom = n; }
+        }
+    }
+    dossiers::save_registry(&app_data_dir, &registry)?;
+
+    // If this was the active dossier, swap the connection
+    if is_active {
+        {
+            let mut conn_guard = state.conn.lock().map_err(|e| e.to_string())?;
+            *conn_guard = new_conn;
+        }
+    }
+
+    Ok(folder_result)
+}
+
+/// Create a backup copy of a dossier's DB file.
+#[derive(Debug, Serialize, Deserialize)]
+struct BackupResult {
+    backup_path: String,
+    db_size_bytes: u64,
+}
+
+/// Manually backup a specific dossier to a user-chosen location.
+#[tauri::command]
+async fn backup_dossier(
+    state: State<'_, AppState>,
+    dossier_id: i64,
+    dest_path: String,
+) -> Result<BackupResult, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let registry = dossiers::load_registry(&app_data_dir)?;
+        let dossier = registry
+            .dossiers
+            .iter()
+            .find(|d| d.id == dossier_id)
+            .ok_or("Dossier not found")?;
+
+        // Copy the DB file
+        std::fs::copy(&dossier.db_path, &dest_path)
+            .map_err(|e| format!("Cannot copy DB: {}", e))?;
+
+        let size = std::fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
+
+        Ok(BackupResult {
+            backup_path: dest_path,
+            db_size_bytes: size,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Check and perform automatic weekly backups for all dossiers.
+/// Returns the list of backups created (empty if none were needed).
+#[tauri::command]
+async fn auto_backup_dossiers(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let registry = dossiers::load_registry(&app_data_dir)?;
+        let backups_dir = std::path::Path::new(&app_data_dir).join("backups");
+        std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
+
+        let now = chrono::Utc::now();
+        let week_ago = now - chrono::Duration::days(7);
+        let mut created = Vec::new();
+
+        for dossier in &registry.dossiers {
+            // Check if a backup exists from this week
+            let backup_prefix = format!("dossier_{}_{}", dossier.id, now.format("%Y_W%W"));
+            let existing: Vec<_> = std::fs::read_dir(&backups_dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| {
+                            e.file_name()
+                                .to_string_lossy()
+                                .starts_with(&backup_prefix)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if !existing.is_empty() {
+                continue; // Already backed up this week
+            }
+
+            // Also check the last backup date from app_settings
+            let backup_name = format!("{}_{}.db", backup_prefix, now.format("%Y%m%d"));
+            let backup_path = backups_dir.join(&backup_name);
+
+            match std::fs::copy(&dossier.db_path, &backup_path) {
+                Ok(_) => {
+                    created.push(format!("{}: {}", dossier.doss_nom, backup_name));
+                }
+                Err(e) => {
+                    eprintln!("Auto-backup failed for {}: {}", dossier.doss_nom, e);
+                }
+            }
+            let _ = week_ago; // suppress unused
+        }
+
+        // Clean up backups older than 4 weeks
+        let cutoff: std::time::SystemTime = (now - chrono::Duration::weeks(4)).into();
+        if let Ok(entries) = std::fs::read_dir(&backups_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if modified < cutoff {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(created)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// List existing automatic backups.
+#[tauri::command]
+async fn list_backups(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let app_data_dir = state.app_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let backups_dir = std::path::Path::new(&app_data_dir).join("backups");
+        if !backups_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut backups: Vec<serde_json::Value> = Vec::new();
+        for entry in std::fs::read_dir(&backups_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let size = meta.len();
+            let modified = meta.modified()
+                .map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.to_rfc3339()
+                })
+                .unwrap_or_default();
+
+            backups.push(serde_json::json!({
+                "name": name,
+                "size_bytes": size,
+                "modified": modified,
+                "path": entry.path().to_string_lossy().to_string(),
+            }));
+        }
+
+        // Sort by modified descending
+        backups.sort_by(|a, b| {
+            b["modified"].as_str().cmp(&a["modified"].as_str())
+        });
+
+        Ok(backups)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -4176,12 +4893,24 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir");
-            let db_path = db::get_db_path(&app_data_dir.to_string_lossy());
+            let app_data_str = app_data_dir.to_string_lossy().to_string();
+
+            // Migrate existing single-DB installation to multi-dossier system.
+            let registry = dossiers::migrate_existing_db(&app_data_str)
+                .expect("Failed to migrate dossier registry");
+
+            // Determine which DB to open: the active dossier's DB, or a fresh one.
+            let db_path = if let Some(active) = dossiers::get_active(&registry) {
+                active.db_path.clone()
+            } else {
+                db::get_db_path(&app_data_str)
+            };
             let conn = db::init_db(&db_path).expect("Failed to init database");
 
             app.manage(AppState {
                 conn: Mutex::new(conn),
-                db_path: db_path.clone(),
+                db_path: Mutex::new(db_path),
+                app_data_dir: app_data_str,
             });
 
             Ok(())
@@ -4278,6 +5007,17 @@ pub fn run() {
             // PCPAIE folder import
             scan_pcpaie_dir,
             import_pcpaie_folder,
+            // Multi-dossier management
+            check_dossier_conflict,
+            get_dossiers,
+            switch_dossier,
+            delete_dossier,
+            get_dossier_stats,
+            rename_dossier,
+            refresh_dossier,
+            backup_dossier,
+            auto_backup_dossiers,
+            list_backups,
             // Enhanced bonuses
             get_active_bonuses_for_period,
             create_enhanced_bonus,

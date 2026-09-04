@@ -84,6 +84,7 @@ export interface EmployeeSummary {
   sit_fam: string | null;
   categorie: string | null;
   unite: string | null;
+  poste_id: number | null;
   total_count: number;
 }
 
@@ -137,6 +138,22 @@ export interface CalcLine {
   is_input: boolean;
   is_secu_s?: boolean;
   is_impos?: boolean;
+  formula?: string | null;
+  evaluated_formula?: string | null;
+  base_value?: number | null;
+  taux_value?: number | null;
+  formule?: string | null;
+}
+
+export interface DebugLogEntry {
+  step: string;
+  code: string;
+  action: string;
+  value: number;
+  description: string;
+  base_value?: number | null;
+  taux_value?: number | null;
+  formule?: string | null;
 }
 
 export interface AppliedBonus {
@@ -165,6 +182,8 @@ export interface CalcResult {
   base_imposable: number;
   irg: number;
   applied_bonuses?: AppliedBonus[];
+  debug_log?: DebugLogEntry[];
+  t_values?: Record<string, number>;
 }
 
 export interface Leave {
@@ -278,7 +297,10 @@ export interface PosteRubrique {
   sort_order: number;
   libelle: string | null;
   classe: number | null;
+  calcul: number;
   manuelle: boolean;
+  is_brut: number | null;
+  formule: string | null;
 }
 
 export interface PosteDetail {
@@ -323,9 +345,11 @@ export const api = {
   scanPcpaieDir: (folderPath: string) =>
     invoke<PcpaieFolderScan>("scan_pcpaie_dir", { dirPath: folderPath }),
 
-  /** Import all PCPAIE data from a folder: auto-detect DB + pointeuse files, then import everything. */
-  importPcpaieFolder: (folderPath: string) =>
-    invoke<FolderImportResult>("import_pcpaie_folder", { folderPath }),
+  /** Import all PCPAIE data from a folder: auto-detect DB + pointeuse files, then import everything.
+   *  mode: "merge" (default) | "separate" (new dossier DB) | "replace" (wipe & reimport)
+   */
+  importPcpaieFolder: (folderPath: string, mode?: "merge" | "separate" | "replace") =>
+    invoke<FolderImportResult>("import_pcpaie_folder", { folderPath, mode: mode ?? null }),
 
   importPointeuse: (userDatPath: string, attlogPaths: string[]) =>
     invoke<PointeuseImportResult>("import_pointeuse_data", {
@@ -734,6 +758,25 @@ export const api = {
   getAvailableEmployeeColumns: () => invoke<string[]>("get_available_employee_columns"),
   exportDatabase: (destPath: string) => invoke<string>("export_database", { destPath }),
   getDatabaseStats: () => invoke<Record<string, number>>("get_database_stats"),
+
+  // Multi-dossier management
+  getDossiers: () => invoke<DossierRegistry>("get_dossiers"),
+  switchDossier: (dossierId: number) =>
+    invoke<DossierInfo>("switch_dossier", { dossierId }),
+  deleteDossier: (dossierId: number, deleteFile: boolean) =>
+    invoke<void>("delete_dossier", { dossierId, deleteFile }),
+  checkDossierConflict: (folderPath: string) =>
+    invoke<DossierConflictCheck>("check_dossier_conflict", { folderPath }),
+  getDossierStats: (dossierId: number) =>
+    invoke<DossierStats>("get_dossier_stats", { dossierId }),
+  renameDossier: (dossierId: number, newName: string) =>
+    invoke<DossierInfo>("rename_dossier", { dossierId, newName }),
+  refreshDossier: (dossierId: number, folderPath: string) =>
+    invoke<FolderImportResult>("refresh_dossier", { dossierId, folderPath }),
+  backupDossier: (dossierId: number, destPath: string) =>
+    invoke<{ backup_path: string; db_size_bytes: number }>("backup_dossier", { dossierId, destPath }),
+  autoBackupDossiers: () => invoke<string[]>("auto_backup_dossiers"),
+  listBackups: () => invoke<BackupInfo[]>("list_backups"),
 };
 
 export interface LookupTableValue {
@@ -773,4 +816,43 @@ export interface UpdateFieldMapping {
   lookup_table: string | null;
   section: string;
   is_visible: boolean;
+}
+
+// ===== Multi-dossier types =====
+
+export interface DossierInfo {
+  id: number;
+  doss_nom: string;
+  db_path: string;
+  imported_at: string;
+  employee_count: number;
+}
+
+export interface DossierRegistry {
+  active_dossier_id: number;
+  dossiers: DossierInfo[];
+}
+
+export interface DossierConflictCheck {
+  scanned_doss_nom: string;
+  is_valid_pcpaie: boolean;
+  is_new_dossier: boolean;
+  existing_dossier_id: number | null;
+  active_doss_nom: string;
+  existing_dossiers: DossierInfo[];
+}
+
+export interface DossierStats {
+  employee_count: number;
+  rubrique_count: number;
+  paie_count: number;
+  db_size_bytes: number;
+  last_period: string | null;
+}
+
+export interface BackupInfo {
+  name: string;
+  size_bytes: number;
+  modified: string;
+  path: string;
 }

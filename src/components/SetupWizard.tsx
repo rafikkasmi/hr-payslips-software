@@ -20,6 +20,7 @@ import {
 
 interface SetupWizardProps {
   onComplete: () => void;
+  onGoToDossiers?: () => void;
 }
 
 /** Progress event from the backend during import */
@@ -75,7 +76,7 @@ const PHASES = [
   },
 ];
 
-export function SetupWizard({ onComplete }: SetupWizardProps) {
+export function SetupWizard({ onComplete, onGoToDossiers }: SetupWizardProps) {
   const [step, setStep] = useState<
     "select" | "scanning" | "preview" | "importing" | "done" | "error"
   >("select");
@@ -150,7 +151,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     }
 
     try {
-      const res = await api.importPcpaieFolder(folderPath);
+      const res = await api.importPcpaieFolder(folderPath, "merge");
       setResult(res);
       setStep("done");
       // Clean up listener
@@ -701,12 +702,23 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
               )}
 
-              <button
-                onClick={onComplete}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
-              >
-                Continuer vers le tableau de bord
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={onComplete}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+                >
+                  Continuer vers le tableau de bord
+                </button>
+                {onGoToDossiers && (
+                  <button
+                    onClick={onGoToDossiers}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    <Database className="h-4 w-4" />
+                    Importer un autre dossier PCPAIE
+                  </button>
+                )}
+              </div>
             </div>
           )}
 

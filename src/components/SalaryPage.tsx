@@ -13,12 +13,7 @@ import { OvertimeModal } from "./salary/OvertimeModal";
 import { PreCalcModal } from "./salary/PreCalcModal";
 import { WorkflowStepper } from "./salary/WorkflowStepper";
 import { PeriodSelector } from "./PeriodSelector";
-import { Modal } from "./ui/Modal";
-import {
-  Calculator, Calendar, Trash2, Loader2, ChevronDown, ChevronRight,
-  DollarSign, History, Play, Plus, Gift, Search, Clock,
-  Pause, FileText, Pencil, Tag, Users,
-} from "lucide-react";
+import { Calendar } from "lucide-react";
 
 export function SalaryPage({ onNavigate }: { onNavigate?: (page: "dashboard" | "employees" | "postes" | "shifts" | "pointeuse" | "attendance" | "leaves" | "bonuses" | "salary") => void }) {
   const [periods, setPeriods] = useState<string[]>([]);
@@ -488,7 +483,7 @@ export function SalaryPage({ onNavigate }: { onNavigate?: (page: "dashboard" | "
         pay_period: editPayPeriod,
         recurrence_type: editRecurrence,
         recurrence_count: editRecurrenceCount || 0,
-        employee_ids: empIds,
+        employee_ids: empIds ?? undefined,
         is_imposable: editIsImposable,
         is_cotisable: editIsCotisable,
       });

@@ -3,11 +3,11 @@ import { api, type Shift } from "../lib/api";
 import { Plus, Clock } from "lucide-react";
 
 const shiftTypes = [
-  { value: "standard", label: "Standard (fixed days + weekends)" },
-  { value: "rotation", label: "Rotation (work N days, rest N days)" },
-  { value: "night", label: "Night Shift" },
-  { value: "3x8", label: "3x8 (three 8-hour shifts)" },
-  { value: "part_time", label: "Part Time" },
+  { value: "standard", label: "Standard (jours fixes + week-end)" },
+  { value: "rotation", label: "Rotation (N jours de travail, N jours de repos)" },
+  { value: "night", label: "Poste de nuit" },
+  { value: "3x8", label: "3x8 (trois postes de 8 heures)" },
+  { value: "part_time", label: "Temps partiel" },
 ];
 
 const defaultConfigs: Record<string, string> = {
@@ -48,24 +48,24 @@ export function ShiftsPage() {
     <div className="p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Shifts</h1>
-          <p className="mt-1 text-sm text-gray-500">Configure work schedules for employees</p>
+          <h1 className="text-2xl font-bold text-gray-900">Horaires</h1>
+          <p className="mt-1 text-sm text-gray-500">Configurer les horaires de travail pour les employés</p>
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
           className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
         >
-          <Plus className="h-4 w-4" /> New Shift
+          <Plus className="h-4 w-4" /> Nouvel horaire
         </button>
       </div>
 
       {showForm && (
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-6">
-          <h2 className="text-lg font-semibold text-gray-900">Create Shift</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Créer un horaire</h2>
           <div className="mt-4 grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Standard 5/2" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nom</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: Standard 5/2" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
@@ -75,24 +75,24 @@ export function ShiftsPage() {
             </div>
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description optionnelle" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Configuration (JSON)</label>
               <textarea value={config} onChange={(e) => setConfig(e.target.value)} rows={4} className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-xs" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Hourly Rate (DZD)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Taux horaire (DZD)</label>
               <input type="number" value={hourlyRate} onChange={(e) => setHourlyRate(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Monthly Hours</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Heures mensuelles</label>
               <input type="number" step="0.01" value={monthlyHours} onChange={(e) => setMonthlyHours(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
           </div>
           <div className="mt-4 flex gap-2">
-            <button onClick={handleCreate} disabled={!name} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">Create</button>
-            <button onClick={() => setShowForm(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+            <button onClick={handleCreate} disabled={!name} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">Créer</button>
+            <button onClick={() => setShowForm(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Annuler</button>
           </div>
         </div>
       )}
@@ -101,7 +101,7 @@ export function ShiftsPage() {
         {shifts.length === 0 ? (
           <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
             <Clock className="mx-auto h-8 w-8 text-gray-400" />
-            <p className="mt-2 text-sm text-gray-500">No shifts configured yet. Create one to assign to employees.</p>
+            <p className="mt-2 text-sm text-gray-500">Aucun horaire configuré pour le moment. Créez-en un pour l'assigner aux employés.</p>
           </div>
         ) : (
           shifts.map((shift) => (
@@ -114,9 +114,9 @@ export function ShiftsPage() {
                 <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">{shift.shift_type}</span>
               </div>
               <div className="mt-3 grid grid-cols-3 gap-4 text-sm">
-                <div><span className="text-gray-500">Hourly Rate:</span> <span className="font-medium text-gray-900">{shift.hourly_rate} DZD</span></div>
-                <div><span className="text-gray-500">Monthly Hours:</span> <span className="font-medium text-gray-900">{shift.monthly_hours}</span></div>
-                <div><span className="text-gray-500">Config:</span> <code className="text-xs text-gray-700">{shift.config}</code></div>
+                <div><span className="text-gray-500">Taux horaire :</span> <span className="font-medium text-gray-900">{shift.hourly_rate} DZD</span></div>
+                <div><span className="text-gray-500">Heures mensuelles :</span> <span className="font-medium text-gray-900">{shift.monthly_hours}</span></div>
+                <div><span className="text-gray-500">Config :</span> <code className="text-xs text-gray-700">{shift.config}</code></div>
               </div>
             </div>
           ))

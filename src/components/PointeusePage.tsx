@@ -120,18 +120,18 @@ export function PointeusePage() {
     setAutoMatchResult("");
     try {
       const count = await api.autoMatchAll(60.0);
-      setAutoMatchResult(`Auto-linked ${count} users to employees.`);
+      setAutoMatchResult(`${count} utilisateurs associés automatiquement aux employés.`);
       setMatches(await api.getFuzzyMatches());
       setSelectedPins(new Set());
     } catch (e) {
-      setAutoMatchResult(`Error: ${e}`);
+      setAutoMatchResult(`Erreur : ${e}`);
     } finally {
       setAutoMatching(false);
     }
   };
 
   const handleClearData = async () => {
-    if (!confirm("Are you sure? This will delete ALL pointeuse users, attendance records, and clear employee PINs.")) return;
+    if (!confirm("Êtes-vous sûr ? Cela supprimera TOUS les utilisateurs de la pointeuse, les enregistrements de présence, et effacera les PINs des employés.")) return;
     setClearing(true);
     try {
       await api.clearPointeuseData();
@@ -186,7 +186,7 @@ export function PointeusePage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Pointeuse</h1>
-          <p className="mt-1 text-sm text-gray-500">Import biometric time clock data and match users to employees</p>
+          <p className="mt-1 text-sm text-gray-500">Importer les données de pointeuse biométrique et associer les utilisateurs aux employés</p>
         </div>
         {matches.length > 0 && (
           <button
@@ -195,41 +195,41 @@ export function PointeusePage() {
             className="flex items-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
           >
             {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-            Clear All Pointeuse Data
+            Effacer toutes les données de la pointeuse
           </button>
         )}
       </div>
 
       <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
-        <h2 className="text-lg font-semibold text-gray-900">Import Pointeuse Data</h2>
+        <h2 className="text-lg font-semibold text-gray-900">Importer les données de la pointeuse</h2>
 
         <div className="mt-4 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">user.dat file</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fichier user.dat</label>
             <div className="flex gap-2">
-              <input value={userDatPath} onChange={(e) => setUserDatPath(e.target.value)} placeholder="Path to user.dat" className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              <button onClick={pickUserDat} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Browse</button>
+              <input value={userDatPath} onChange={(e) => setUserDatPath(e.target.value)} placeholder="Chemin vers user.dat" className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              <button onClick={pickUserDat} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Parcourir</button>
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">attlog files (one or more)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fichiers attlog (un ou plusieurs)</label>
             <div className="flex gap-2">
               <input
                 value={attlogPaths.join(", ")}
                 readOnly
-                placeholder="Select attlog .dat files"
+                placeholder="Sélectionner les fichiers attlog .dat"
                 className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
-              <button onClick={pickAttlogs} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Browse Files</button>
+              <button onClick={pickAttlogs} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Parcourir les fichiers</button>
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Or select attlog directory (for Quick Re-import)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Ou sélectionner le dossier attlog (pour réimport rapide)</label>
             <div className="flex gap-2">
-              <input value={attlogDir} onChange={(e) => setAttlogDir(e.target.value)} placeholder="Path to attlog directory" className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              <button onClick={pickAttlogDir} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Browse</button>
+              <input value={attlogDir} onChange={(e) => setAttlogDir(e.target.value)} placeholder="Chemin vers le dossier attlog" className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              <button onClick={pickAttlogDir} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Parcourir</button>
             </div>
           </div>
 
@@ -242,7 +242,7 @@ export function PointeusePage() {
               className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              Import & Match
+              Importer & Associer
             </button>
             <button
               onClick={handleSavePaths}
@@ -250,7 +250,7 @@ export function PointeusePage() {
               className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               {savingPaths ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Save Path
+              Enregistrer le chemin
             </button>
             {savedPaths.userDat && (
               <button
@@ -259,14 +259,14 @@ export function PointeusePage() {
                 className="flex items-center gap-2 rounded-lg border border-green-300 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-50 disabled:opacity-50"
               >
                 {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
-                Quick Re-import
+                Réimport rapide
               </button>
             )}
           </div>
           {(savedPaths.userDat || savedPaths.attlogDir) && (
             <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-600 space-y-0.5">
-              {savedPaths.userDat && <div><strong>user.dat:</strong> {savedPaths.userDat}</div>}
-              {savedPaths.attlogDir && <div><strong>attlog dir:</strong> {savedPaths.attlogDir}</div>}
+              {savedPaths.userDat && <div><strong>user.dat :</strong> {savedPaths.userDat}</div>}
+              {savedPaths.attlogDir && <div><strong>dossier attlog :</strong> {savedPaths.attlogDir}</div>}
             </div>
           )}
         </div>
@@ -275,14 +275,14 @@ export function PointeusePage() {
           <div className="mt-4 rounded-lg bg-green-50 p-4">
             <div className="flex items-center gap-2">
               <CheckCircle className="h-5 w-5 text-green-600" />
-              <span className="text-sm font-medium text-green-900">Import complete!</span>
+              <span className="text-sm font-medium text-green-900">Import terminé !</span>
             </div>
             <div className="mt-2 grid grid-cols-4 gap-4 text-sm">
-              <div><span className="text-green-700">Users:</span> <strong>{importResult.users_imported}</strong></div>
-              <div><span className="text-green-700">Attendance entries:</span> <strong>{importResult.attlog_entries}</strong></div>
-              <div><span className="text-green-700">Unmatched PINs:</span> <strong>{importResult.unmatched_pins.length}</strong></div>
+              <div><span className="text-green-700">Utilisateurs :</span> <strong>{importResult.users_imported}</strong></div>
+              <div><span className="text-green-700">Entrées de présence :</span> <strong>{importResult.attlog_entries}</strong></div>
+              <div><span className="text-green-700">PINs non associés :</span> <strong>{importResult.unmatched_pins.length}</strong></div>
               <div>
-                <span className="text-green-700">Date range:</span>{" "}
+                <span className="text-green-700">Période :</span>{" "}
                 <strong>
                   {importResult.date_range_start && importResult.date_range_end
                     ? `${importResult.date_range_start} → ${importResult.date_range_end}`
@@ -292,7 +292,7 @@ export function PointeusePage() {
             </div>
             {importResult.per_user_counts && importResult.per_user_counts.length > 0 && (
               <div className="mt-3 border-t border-green-200 pt-2">
-                <h4 className="text-xs font-semibold text-green-800 mb-1">PUNCHES PER USER (top 10)</h4>
+                <h4 className="text-xs font-semibold text-green-800 mb-1">POINTAGES PAR UTILISATEUR (top 10)</h4>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 max-h-40 overflow-y-auto">
                   {importResult.per_user_counts.slice(0, 10).map(([pin, name, count]) => (
                     <div key={pin} className="flex justify-between text-xs">
@@ -302,7 +302,7 @@ export function PointeusePage() {
                   ))}
                 </div>
                 {importResult.per_user_counts.length > 10 && (
-                  <p className="text-xs text-gray-500 mt-1">+ {importResult.per_user_counts.length - 10} more users</p>
+                  <p className="text-xs text-gray-500 mt-1">+ {importResult.per_user_counts.length - 10} autres utilisateurs</p>
                 )}
               </div>
             )}
@@ -314,9 +314,9 @@ export function PointeusePage() {
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Fuzzy Name Matching</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Correspondance floue des noms</h2>
               <p className="mt-1 text-sm text-gray-500">
-                {linkedCount} linked / {matches.length} total — {unlinkedMatches.length} pending
+                {linkedCount} associés / {matches.length} au total — {unlinkedMatches.length} en attente
               </p>
             </div>
             <div className="flex gap-2">
@@ -326,7 +326,7 @@ export function PointeusePage() {
                 className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
               >
                 {autoMatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
-                Auto-Match All (score ≥ 60%)
+                Association automatique (score ≥ 60%)
               </button>
             </div>
           </div>
@@ -341,17 +341,17 @@ export function PointeusePage() {
           {/* Bulk actions bar */}
           <div className="mt-4 flex items-center gap-3 border-b border-gray-200 pb-3">
             <button onClick={selectAll} className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-900">
-              <CheckSquare className="h-4 w-4" /> Select All Pending
+              <CheckSquare className="h-4 w-4" /> Sélectionner tous en attente
             </button>
             <button onClick={selectNone} className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-900">
-              <Square className="h-4 w-4" /> Deselect All
+              <Square className="h-4 w-4" /> Tout désélectionner
             </button>
             {selectedPins.size > 0 && (
               <button
                 onClick={handleBulkLink}
                 className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
               >
-                <Link2 className="h-3 w-3" /> Link Selected ({selectedPins.size})
+                <Link2 className="h-3 w-3" /> Associer la sélection ({selectedPins.size})
               </button>
             )}
           </div>
@@ -379,14 +379,14 @@ export function PointeusePage() {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-gray-900">
                       PIN {m.pin}: {m.pointeuse_name}
-                      {isLinked && <span className="ml-2 text-xs text-green-600 font-medium">✓ Linked</span>}
+                      {isLinked && <span className="ml-2 text-xs text-green-600 font-medium">✓ Associé</span>}
                     </div>
                     {m.best_employee_id ? (
                       <div className="text-xs text-gray-500">
-                        → {m.best_nom} {m.best_prenom} (mat={m.best_matricule}) — <span className={scoreColor}>Score: {m.best_score.toFixed(1)}%</span>
+                        → {m.best_nom} {m.best_prenom} (mat={m.best_matricule}) — <span className={scoreColor}>Score : {m.best_score.toFixed(1)}%</span>
                       </div>
                     ) : (
-                      <div className="text-xs text-red-500">No match found</div>
+                      <div className="text-xs text-red-500">Aucune correspondance trouvée</div>
                     )}
                   </div>
                   {!isLinked && m.best_employee_id && (
@@ -394,7 +394,7 @@ export function PointeusePage() {
                       onClick={() => handleLink(m.pin, m.best_employee_id)}
                       className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
                     >
-                      <Link2 className="h-3 w-3" /> Link
+                      <Link2 className="h-3 w-3" /> Associer
                     </button>
                   )}
                 </div>

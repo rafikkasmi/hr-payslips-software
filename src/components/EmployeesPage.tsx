@@ -1,11 +1,11 @@
-import { useState, useEffect, useMemo, useDeferredValue, useCallback } from "react";
+import { useState, useEffect, useDeferredValue } from "react";
 import { api, type EmployeeSummary, type Shift, type AttendanceDay, type CalcResult, type EmployeeRubrique, type RubriqueHistoryEntry, type EmployeeFilterOptions, type HistoricalPayslip } from "../lib/api";
 import { SalaryHistoryPanel } from "./SalaryHistoryPanel";
 import { PeriodSelector } from "./PeriodSelector";
 import { formatCurrency } from "../lib/utils";
 import {
   Search, X, Clock, Calculator, History, ChevronLeft, ChevronRight,
-  Loader2, DollarSign, Edit2, Save, Filter, ChevronDown, Calendar,
+  Loader2, DollarSign, Edit2, Save, Filter, Calendar,
 } from "lucide-react";
 
 const statusColors: Record<string, string> = {
@@ -431,7 +431,7 @@ export function EmployeesPage() {
       )}
 
       {loading ? (
-        <div className="mt-8 text-center text-sm text-gray-500">Loading...</div>
+        <div className="mt-8 text-center text-sm text-gray-500">Chargement...</div>
       ) : (
         <div>
         <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 bg-white">
@@ -439,11 +439,11 @@ export function EmployeesPage() {
             <thead className="border-b border-gray-200 bg-gray-50">
               <tr>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Matricule</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Name</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">Nom</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Poste/Fonction</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">Pointeuse</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Shift</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Active</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">Vacation</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">Actif</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -459,7 +459,7 @@ export function EmployeesPage() {
                         PIN {emp.pointeuse_pin}
                       </span>
                     ) : (
-                      <span className="text-xs text-gray-400">Not linked</span>
+                      <span className="text-xs text-gray-400">Non liée</span>
                     )}
                   </td>
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -471,7 +471,7 @@ export function EmployeesPage() {
                       }}
                       className="rounded border border-gray-300 px-2 py-1 text-xs"
                     >
-                      <option value="">No shift</option>
+                      <option value="">Aucune vacation</option>
                       {shifts.map((s) => (
                         <option key={s.id} value={s.name}>{s.name}</option>
                       ))}
@@ -481,7 +481,7 @@ export function EmployeesPage() {
                     <span className={`inline-flex h-2 w-2 rounded-full ${emp.actif ? "bg-green-500" : "bg-gray-300"}`} />
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button className="text-xs font-medium text-blue-600 hover:text-blue-800">View →</button>
+                    <button className="text-xs font-medium text-blue-600 hover:text-blue-800">Voir →</button>
                   </td>
                 </tr>
               ))}
@@ -532,8 +532,8 @@ export function EmployeesPage() {
               {[
                 { key: "info", label: "Info", icon: null },
                 { key: "family", label: "Famille", icon: null },
-                { key: "attendance", label: "Attendance", icon: Clock },
-                { key: "salary", label: "Salary", icon: Calculator },
+                { key: "attendance", label: "Présence", icon: Clock },
+                { key: "salary", label: "Salaire", icon: Calculator },
                 { key: "salary_history", label: "Historique salaire", icon: History },
                 { key: "primes", label: "Primes", icon: DollarSign },
                 { key: "leave", label: "Congés", icon: null },
@@ -562,24 +562,24 @@ export function EmployeesPage() {
               {detailTab === "primes" && (
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-900">Rubrique Values</h3>
+                    <h3 className="text-sm font-semibold text-gray-900">Valeurs des rubriques</h3>
                     <button
                       onClick={() => loadRubHistory()}
                       className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
                     >
-                      <History className="h-3 w-3" /> View All History
+                      <History className="h-3 w-3" /> Voir tout l'historique
                     </button>
                   </div>
                   <div className="space-y-1">
                     {empRubriques.length === 0 && (
-                      <p className="text-sm text-gray-400">No rubriques assigned</p>
+                      <p className="text-sm text-gray-400">Aucune rubrique assignée</p>
                     )}
                     {empRubriques.map((r) => (
                       <div key={r.rubrique_code} className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2">
                         <span className="font-mono text-xs text-gray-500 w-16">{r.rubrique_code}</span>
                         <span className="text-sm text-gray-700 flex-1">{r.libelle ?? "—"}</span>
                         <span className={`text-xs px-2 py-0.5 rounded-full ${r.source === "override" ? "bg-orange-100 text-orange-700" : "bg-blue-100 text-blue-700"}`}>
-                          {r.source === "override" ? "Override" : "Poste"}
+                          {r.source === "override" ? "Remplacement" : "Poste"}
                         </span>
                         {editingRub === r.rubrique_code ? (
                           <div className="flex items-center gap-1">
@@ -592,7 +592,7 @@ export function EmployeesPage() {
                               autoFocus
                             />
                             <button onClick={() => handleSaveRubrique(r.rubrique_code)} className="rounded bg-green-600 px-2 py-0.5 text-xs text-white hover:bg-green-700"><Save className="h-3 w-3" /></button>
-                            <button onClick={() => setEditingRub(null)} className="rounded bg-gray-200 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-300">Cancel</button>
+                            <button onClick={() => setEditingRub(null)} className="rounded bg-gray-200 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-300">Annuler</button>
                           </div>
                         ) : (
                           <div className="flex items-center gap-2">
@@ -619,8 +619,8 @@ export function EmployeesPage() {
                   {showHistory && rubHistory.length > 0 && (
                     <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <div className="flex items-center justify-between mb-2">
-                        <h4 className="text-xs font-semibold text-gray-600">Change History</h4>
-                        <button onClick={() => setShowHistory(false)} className="text-xs text-gray-500 hover:text-gray-700">Close</button>
+                        <h4 className="text-xs font-semibold text-gray-600">Historique des modifications</h4>
+                        <button onClick={() => setShowHistory(false)} className="text-xs text-gray-500 hover:text-gray-700">Fermer</button>
                       </div>
                       <div className="space-y-1 max-h-40 overflow-y-auto">
                         {rubHistory.map((h) => (
@@ -703,7 +703,7 @@ export function EmployeesPage() {
                         className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
                       >
                         {calculating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
-                        Calculate
+                        Calculer
                       </button>
                       <button
                         onClick={handleLoadPreCalc}
@@ -711,13 +711,13 @@ export function EmployeesPage() {
                         className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                       >
                         {loadingPreCalc ? <Loader2 className="h-4 w-4 animate-spin" /> : <History className="h-4 w-4" />}
-                        Pre-calc Summary
+                        Résumé pré-calcul
                       </button>
                     </div>
 
                     {preCalc && (
                       <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
-                        <h4 className="text-sm font-semibold text-blue-900">Pre-calculation Summary — {String(preCalc.period ?? "")}</h4>
+                        <h4 className="text-sm font-semibold text-blue-900">Résumé pré-calcul — {String(preCalc.period ?? "")}</h4>
                         <div className="grid grid-cols-3 gap-3 text-sm">
                           <div className="rounded bg-white p-2">
                             <div className="text-xs text-gray-500">Jours de présence</div>
@@ -808,7 +808,7 @@ export function EmployeesPage() {
                         </div>
                         {calcResult.applied_bonuses && calcResult.applied_bonuses.length > 0 && (
                           <div className="mt-2 border-t border-gray-200 pt-2">
-                            <h4 className="text-xs font-semibold text-gray-500 mb-1">APPLIED BONUSES & DEDUCTIONS</h4>
+                            <h4 className="text-xs font-semibold text-gray-500 mb-1">PRIMES & DÉDUCTIONS APPLIQUÉES</h4>
                             <div className="space-y-0.5">
                               {calcResult.applied_bonuses.map((b) => (
                                 <div key={b.id} className="flex justify-between text-xs py-0.5">
@@ -828,7 +828,7 @@ export function EmployeesPage() {
                         {/* Attendance calendar grid */}
                         {calcCalendar.length > 0 && (
                           <div className="mt-4 border-t border-gray-200 pt-3">
-                            <h4 className="text-xs font-semibold text-gray-500 mb-2">ATTENDANCE — {calcPeriod}</h4>
+                            <h4 className="text-xs font-semibold text-gray-500 mb-2">PRÉSENCE — {calcPeriod}</h4>
                             <div className="grid grid-cols-7 gap-1">
                               {["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"].map(d => (
                                 <div key={d} className="text-center text-[10px] font-semibold text-gray-400 pb-1">{d}</div>

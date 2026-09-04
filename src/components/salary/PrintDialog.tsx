@@ -26,7 +26,7 @@ export function PrintDialog({ items, calcResults, selectedPeriod, onClose, setPa
     for (let i = 0; i < items.length; i++) {
       const h = items[i];
       const key = `${h.source}-${h.id}`;
-      let result = calcResults[key];
+      let result: CalcResult | null = calcResults[key] ?? null;
       if (!result && h.employee_id && h.source === "app") {
         try {
           result = await api.getSavedCalculation(h.employee_id, h.period ?? selectedPeriod);
@@ -55,7 +55,7 @@ export function PrintDialog({ items, calcResults, selectedPeriod, onClose, setPa
       for (let i = 0; i < items.length; i++) {
         const h = items[i];
         const key = `${h.source}-${h.id}`;
-        let result = calcResults[key];
+        let result: CalcResult | null = calcResults[key] ?? null;
         if (!result && h.employee_id && h.source === "app") {
           try {
             result = await api.getSavedCalculation(h.employee_id, h.period ?? selectedPeriod);
@@ -83,7 +83,7 @@ export function PrintDialog({ items, calcResults, selectedPeriod, onClose, setPa
     for (let i = 0; i < items.length; i++) {
       const h = items[i];
       const key = `${h.source}-${h.id}`;
-      let result = calcResults[key];
+      let result: CalcResult | null = calcResults[key] ?? null;
       if (!result && h.employee_id && h.source === "app") {
         try {
           result = await api.getSavedCalculation(h.employee_id, h.period ?? selectedPeriod);

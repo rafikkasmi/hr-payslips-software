@@ -363,7 +363,7 @@ function BulletinButton({ h, calcResults, selectedPeriod, setPayslipPreview }: {
     e.stopPropagation();
     setError(null);
     const key = `${h.source}-${h.id}`;
-    let r = calcResults[key];
+    let r: CalcResult | null = calcResults[key] ?? null;
 
     if (r) {
       setPayslipPreview(r);

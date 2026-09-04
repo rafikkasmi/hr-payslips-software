@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { CalcResult, SalaryHistoryEntry, HistoricalPayslip, Bonus, EmployeeSummary, OvertimeEntry, OvertimePreviewData, PreCalcEntry, CalcProgress, RubSuggestion, RubMatch } from "./types";
 
 export interface SalaryContextValue {
@@ -91,7 +92,7 @@ export interface SalaryContextValue {
   bonusContractTypes: string;
   setBonusContractTypes: (s: string) => void;
   selectedEmpIds: Set<number>;
-  setSelectedEmpIds: React.Dispatch<React.SetStateAction<Set<number>>>;
+  setSelectedEmpIds: Dispatch<SetStateAction<Set<number>>>;
   toggleEmp: (id: number) => void;
   empSearch: string;
   setEmpSearch: (s: string) => void;
@@ -141,7 +142,7 @@ export interface SalaryContextValue {
   editTargetValue: string;
   setEditTargetValue: (s: string) => void;
   editSelectedEmpIds: Set<number>;
-  setEditSelectedEmpIds: React.Dispatch<React.SetStateAction<Set<number>>>;
+  setEditSelectedEmpIds: Dispatch<SetStateAction<Set<number>>>;
   toggleEditEmp: (id: number) => void;
   editEmpSearch: string;
   setEditEmpSearch: (s: string) => void;
@@ -175,7 +176,7 @@ export interface SalaryContextValue {
   handleSaveOvertime: (empId: number) => void;
   handleComputeOvertimeFromAttendance: (empId: number) => void;
   handleComputeAllOvertime: () => void;
-  setOvertimeEntries: React.Dispatch<React.SetStateAction<Record<string, OvertimeEntry>>>;
+  setOvertimeEntries: Dispatch<SetStateAction<Record<string, OvertimeEntry>>>;
 
   // Pre-calc
   preCalcData: Record<number, PreCalcEntry>;
@@ -190,7 +191,7 @@ export interface SalaryContextValue {
 
   // Rubriques
   rubriques: Record<string, unknown>[];
-  setRubriques: React.Dispatch<React.SetStateAction<Record<string, unknown>[]>>;
+  setRubriques: Dispatch<SetStateAction<Record<string, unknown>[]>>;
 
   // Stats
   appCount: number;

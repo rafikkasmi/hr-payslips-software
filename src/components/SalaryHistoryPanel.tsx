@@ -27,9 +27,9 @@ export function SalaryHistoryPanel({ employeeId }: SalaryHistoryPanelProps) {
       const top = [...h.series]
         .map(s => ({
           ...s,
-          total: s.data.reduce((a, b) => a + (b ?? 0), 0),
+          total: s.data.reduce((a: number, b) => a + (b ?? 0), 0),
         }))
-        .sort((a, b) => b.total - a.total)
+        .sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
         .slice(0, 5)
         .map(s => s.code);
       setSelectedRubs(new Set(top));

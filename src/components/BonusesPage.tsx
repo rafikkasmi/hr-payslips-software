@@ -88,7 +88,7 @@ export function BonusesPage() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Delete this bonus?")) return;
+    if (!confirm("Supprimer cette prime ?")) return;
     try { await api.deleteBonus(id); loadBonuses(); } catch (e) { console.error(e); }
   };
 
@@ -128,11 +128,11 @@ export function BonusesPage() {
     <div className="p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Bonuses & Deductions</h1>
-          <p className="mt-1 text-sm text-gray-500">Add extra bonuses or deductions for employees</p>
+          <h1 className="text-2xl font-bold text-gray-900">Primes & Retenues</h1>
+          <p className="mt-1 text-sm text-gray-500">Ajouter des primes ou des retenues pour les employés</p>
         </div>
         <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-          <Plus className="h-4 w-4" /> Add Bonus/Deduction
+          <Plus className="h-4 w-4" /> Ajouter une prime/retenue
         </button>
       </div>
 
@@ -140,55 +140,55 @@ export function BonusesPage() {
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-6">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Hard work bonus" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Titre</label>
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="ex: Prime de rendement" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
               <select value={bonusType} onChange={(e) => setBonusType(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
-                <option value="bonus">Bonus (+)</option>
-                <option value="deduction">Deduction (-)</option>
+                <option value="bonus">Prime (+)</option>
+                <option value="deduction">Retenue (-)</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Montant</label>
               <input type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amount Type</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Type de montant</label>
               <select value={amountType} onChange={(e) => setAmountType(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
-                <option value="fixed">Fixed amount</option>
-                <option value="per_day">Per day worked</option>
-                <option value="income_grid">Income grid based</option>
+                <option value="fixed">Montant fixe</option>
+                <option value="per_day">Par jour travaillé</option>
+                <option value="income_grid">Basé sur grille de salaires</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Rubrique Code</label>
-              <input value={rubriqueCode} onChange={(e) => setRubriqueCode(e.target.value)} placeholder="e.g. 100" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Code rubrique</label>
+              <input value={rubriqueCode} onChange={(e) => setRubriqueCode(e.target.value)} placeholder="ex: 100" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Target Type</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Cible</label>
               <select value={targetType} onChange={(e) => setTargetType(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
-                <option value="all">All Employees</option>
-                <option value="individual">Individual</option>
+                <option value="all">Tous les employés</option>
+                <option value="individual">Individuel</option>
                 <option value="section">Section</option>
                 <option value="structure">Structure</option>
                 <option value="unite">Unité</option>
                 <option value="affectatio">Affectation</option>
-                <option value="contract">Contract Type</option>
+                <option value="contract">Type de contrat</option>
               </select>
             </div>
             {targetType === "individual" && (
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Select Employees ({selectedEmpIds.size} selected)
+                  Sélectionner les employés ({selectedEmpIds.size} sélectionné(s))
                 </label>
                 <div className="relative mb-2">
                   <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400" />
                   <input
                     value={empSearch}
                     onChange={(e) => setEmpSearch(e.target.value)}
-                    placeholder="Search employees..."
+                    placeholder="Rechercher des employés..."
                     className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-2 text-sm"
                   />
                 </div>
@@ -218,25 +218,25 @@ export function BonusesPage() {
             )}
             {targetType !== "all" && targetType !== "individual" && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Target Value</label>
-                <input value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder="Section/structure name" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Valeur cible</label>
+                <input value={targetValue} onChange={(e) => setTargetValue(e.target.value)} placeholder="Nom de la section/structure" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Pay Period (optional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Période de paie (optionnel)</label>
               <input type="month" value={payPeriod} onChange={(e) => setPayPeriod(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Recurrence</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Récurrence</label>
               <select value={recurrenceType} onChange={(e) => setRecurrenceType(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
-                <option value="one_time">One time</option>
-                <option value="recurring">Recurring (N times)</option>
-                <option value="permanent">Permanent (until deleted)</option>
+                <option value="one_time">Ponctuelle</option>
+                <option value="recurring">Récurrente (N fois)</option>
+                <option value="permanent">Permanente (jusqu'à suppression)</option>
               </select>
             </div>
             {recurrenceType === "recurring" && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Recurrence Count</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre de récurrences</label>
                 <input type="number" value={recurrenceCount} onChange={(e) => setRecurrenceCount(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
               </div>
             )}
@@ -247,33 +247,33 @@ export function BonusesPage() {
             <div className="col-span-2 flex flex-wrap gap-4">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={isPercentage} onChange={(e) => setIsPercentage(e.target.checked)} />
-                Percentage of base salary
+                Pourcentage du salaire de base
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={isImposable} onChange={(e) => setIsImposable(e.target.checked)} />
-                Imposable
+                Imposable (IRG)
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={isCotisable} onChange={(e) => setIsCotisable(e.target.checked)} />
-                Cotisable
+                Cotisable (CNAS)
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={isAbsenceDependent} onChange={(e) => setIsAbsenceDependent(e.target.checked)} />
-                Absence-dependent (prorated)
+                Dépend des absences (proratisé)
               </label>
             </div>
             {isAbsenceDependent && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Absence Divisor</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Diviseur d'absence</label>
                 <input type="number" value={absenceDivisor} onChange={(e) => setAbsenceDivisor(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
               </div>
             )}
           </div>
           <div className="mt-4 flex gap-2">
             <button onClick={handleCreate} disabled={!title.trim() || creating || (targetType === "individual" && selectedEmpIds.size === 0)} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-              {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Create
+              {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Créer
             </button>
-            <button onClick={() => setShowForm(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+            <button onClick={() => setShowForm(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Annuler</button>
           </div>
         </div>
       )}
@@ -282,7 +282,7 @@ export function BonusesPage() {
         {bonuses.length === 0 ? (
           <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
             <Gift className="mx-auto h-8 w-8 text-gray-400" />
-            <p className="mt-2 text-sm text-gray-500">No bonuses or deductions yet.</p>
+            <p className="mt-2 text-sm text-gray-500">Aucune prime ou retenue pour le moment.</p>
           </div>
         ) : (
           bonuses.map((b) => (
@@ -310,42 +310,42 @@ export function BonusesPage() {
                 <div className="mt-3 border-t border-gray-100 pt-3">
                   <div className="grid grid-cols-3 gap-2 text-xs text-gray-600 mb-3">
                     <div><span className="font-medium text-gray-700">Rubrique:</span> {b.rubrique_code || "—"}</div>
-                    <div><span className="font-medium text-gray-700">Period:</span> {b.pay_period || "all"}</div>
-                    <div><span className="font-medium text-gray-700">Target:</span> {b.target_value || "all"}</div>
-                    <div><span className="font-medium text-gray-700">Status:</span> {b.status}</div>
+                    <div><span className="font-medium text-gray-700">Période:</span> {b.pay_period || "toutes"}</div>
+                    <div><span className="font-medium text-gray-700">Cible:</span> {b.target_value || "tous"}</div>
+                    <div><span className="font-medium text-gray-700">Statut:</span> {b.status}</div>
                     <div><span className="font-medium text-gray-700">Type:</span> {b.bonus_type}</div>
-                    <div><span className="font-medium text-gray-700">Percentage:</span> {b.is_percentage ? "Yes" : "No"}</div>
-                    <div><span className="font-medium text-gray-700">Recurrence:</span> {b.recurrence_type ?? "one_time"}{b.recurrence_count ? ` (${b.recurrence_count}x)` : ""}</div>
-                    <div><span className="font-medium text-gray-700">Cotisable:</span> {b.is_cotisable ? "Yes" : "No"}</div>
-                    <div><span className="font-medium text-gray-700">Imposable:</span> {b.is_imposable ? "Yes" : "No"}</div>
+                    <div><span className="font-medium text-gray-700">Pourcentage:</span> {b.is_percentage ? "Oui" : "Non"}</div>
+                    <div><span className="font-medium text-gray-700">Récurrence:</span> {b.recurrence_type ?? "one_time"}{b.recurrence_count ? ` (${b.recurrence_count}x)` : ""}</div>
+                    <div><span className="font-medium text-gray-700">Cotisable:</span> {b.is_cotisable ? "Oui" : "Non"}</div>
+                    <div><span className="font-medium text-gray-700">Imposable:</span> {b.is_imposable ? "Oui" : "Non"}</div>
                   </div>
 
                   {editingId === b.id && (
                     <div className="border-t border-gray-100 pt-3">
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">Title</label>
+                          <label className="block text-xs text-gray-500 mb-1">Titre</label>
                           <input value={editTitle} onChange={e => setEditTitle(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">Amount</label>
+                          <label className="block text-xs text-gray-500 mb-1">Montant</label>
                           <input type="number" value={editAmount} onChange={e => setEditAmount(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">Pay Period</label>
+                          <label className="block text-xs text-gray-500 mb-1">Période de paie</label>
                           <input type="month" value={editPayPeriod} onChange={e => setEditPayPeriod(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">Recurrence</label>
+                          <label className="block text-xs text-gray-500 mb-1">Récurrence</label>
                           <select value={editRecurrence} onChange={e => setEditRecurrence(e.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
-                            <option value="one_time">One time</option>
-                            <option value="recurring">Recurring (N times)</option>
-                            <option value="permanent">Permanent</option>
+                            <option value="one_time">Ponctuelle</option>
+                            <option value="recurring">Récurrente (N fois)</option>
+                            <option value="permanent">Permanente</option>
                           </select>
                         </div>
                         {editRecurrence === "recurring" && (
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">Recurrence Count</label>
+                            <label className="block text-xs text-gray-500 mb-1">Nombre de récurrences</label>
                             <input type="number" value={editRecurrenceCount} onChange={e => setEditRecurrenceCount(Number(e.target.value))} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
                           </div>
                         )}
@@ -363,9 +363,9 @@ export function BonusesPage() {
                       <div className="mt-3 flex gap-2">
                         <button onClick={handleSaveEdit} disabled={!editTitle.trim() || savingEdit} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                           {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                          Save
+                          Enregistrer
                         </button>
-                        <button onClick={cancelEdit} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                        <button onClick={cancelEdit} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Annuler</button>
                       </div>
                     </div>
                   )}

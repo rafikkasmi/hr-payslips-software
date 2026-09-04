@@ -2,6 +2,28 @@
 
 Application desktop de gestion de la paie conforme à la réglementation algérienne (CNAS, IRG, Loi 90-11). Construite avec **Tauri 2.x** (Rust + React/TypeScript), elle importe les données depuis PCPAIE et offre une interface moderne pour le calcul des bulletins de salaire, la simulation en temps réel et le paramétrage complet des règles de calcul.
 
+## Gestion multi-dossiers (multi-sociétés)
+
+L'application supporte la gestion de **plusieurs dossiers PCPAIE** indépendants, chacun avec sa propre base de données SQLite :
+
+- **Import séparé** : chaque dossier PCPAIE est importé dans sa propre DB (`hamtech_paie_1.db`, `hamtech_paie_2.db`, ...)
+- **Bascule instantanée** : un sélecteur de dossier dans la barre latérale permet de basculer entre les sociétés en un clic — toutes les données de l'application (employés, rubriques, bulletins, paie, etc.) suivent la sélection
+- **Détection de conflit** : lors de l'import d'un nouveau dossier, l'app détecte s'il s'agit d'un dossier différent et propose 3 options :
+  - **Gérer séparément** : créer une nouvelle base de données pour ce dossier
+  - **Fusionner** : importer les données dans la base active (écrase les employés existants avec le même matricule)
+  - **Remplacer** : effacer la base actuelle et importer le nouveau dossier
+- **Page de gestion dédiée** (accessible depuis le tableau de bord → carte « Base de données ») :
+  - Statistiques par dossier (employés, rubriques, bulletins, taille DB, dernière période)
+  - Tableau comparatif côte à côte de tous les dossiers
+  - Recherche/filtrage des dossiers par nom
+  - Renommage d'un dossier
+  - Rafraîchissement (re-import depuis PCPAIE)
+  - Export/sauvegarde manuelle
+  - Suppression d'un dossier (avec option de suppression du fichier DB)
+- **Sauvegarde automatique hebdomadaire** : backups automatiques de chaque DB, conservés 4 semaines
+- **Registry JSON** : un fichier `dossiers.json` centralise les métadonnées (ID, nom, chemin DB, date d'import, nombre d'employés)
+- **Migration automatique** : les installations existantes avec une DB unique `hamtech_paie.db` sont migrées automatiquement vers le format multi-dossiers
+
 ## Fonctionnalités
 
 ### Gestion des employés
@@ -113,7 +135,10 @@ Configuration globale appliquée à tous les calculs de paie :
 ```
 src/
 ├── components/
-│   ├── DashboardPage.tsx      # Tableau de bord
+│   ├── DashboardPage.tsx      # Tableau de bord (carte Base de données cliquable)
+│   ├── DossiersPage.tsx       # Gestion multi-dossiers (import, switch, backup, compare)
+│   ├── DossierSwitcher.tsx    # Sélecteur de dossier dans la sidebar
+│   ├── DossierConflictDialog.tsx # Dialogue de conflit (séparer/fusionner/remplacer)
 │   ├── EmployeesPage.tsx      # Gestion employés + filtres
 │   ├── PostesPage.tsx         # Profils de paie
 │   ├── RubriquesPage.tsx      # Rubriques + Paramètres Salaires + Modal picker
@@ -125,17 +150,19 @@ src/
 │   ├── LeavesPage.tsx         # Congés
 │   ├── ShiftsPage.tsx         # Horaires
 │   ├── PointeusePage.tsx      # Pointeuse
-│   └── SettingsPage.tsx       # Paramètres
+│   ├── SetupWizard.tsx        # Assistant de configuration initial
+│   └── SettingsPage.tsx       # Paramètres (export DB)
 ├── lib/
-│   ├── api.ts                 # Interface Tauri (invoke)
+│   ├── api.ts                 # Interface Tauri (invoke) + types DossierInfo/DossierStats
 │   └── utils.ts               # Formatage (devise, dates)
 src-tauri/
 └── src/
-    ├── lib.rs                 # Commandes Tauri (CRUD, calcul, salary_settings)
+    ├── lib.rs                 # Commandes Tauri (CRUD, calcul, multi-dossiers, backup)
+    ├── dossiers.rs            # Registry multi-dossiers (DossierInfo, migration, stats, rename)
     ├── calculator.rs          # Moteur de calcul + SalarySettings struct
     ├── db.rs                  # Schéma SQLite + salary_settings table
-    ├── import.rs              # Import PCPAIE
-    └── native_import.rs       # Import natif DBF
+    ├── import.rs              # Import PCPAIE (SQLite)
+    └── native_import.rs       # Import natif DBF (.DTA)
 ```
 
 ## Documentation technique

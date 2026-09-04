@@ -155,6 +155,8 @@ pub struct SalarySettings {
     pub retenues_total_code: String,
     /// Code of the rubrique for net a payer (default: "770")
     pub net_payer_code: String,
+    /// Code of the rubrique for IRG net (default: "660", 2025 system may use "974")
+    pub irg_net_code: String,
     /// CNAS employee rate (default: 9.0)
     pub cnas_employee_rate: f64,
     /// CNAS employer rate (default: 26.0)
@@ -186,6 +188,7 @@ impl Default for SalarySettings {
             gains_total_code: "765".to_string(),
             retenues_total_code: "767".to_string(),
             net_payer_code: "770".to_string(),
+            irg_net_code: "660".to_string(),
             cnas_employee_rate: 9.0,
             cnas_employer_rate: 26.0,
             irg_abattement_rate: 0.40,
@@ -216,6 +219,7 @@ pub fn load_salary_settings(conn: &Connection) -> SalarySettings {
     if let Some(v) = get("gains_total_code") { settings.gains_total_code = v; }
     if let Some(v) = get("retenues_total_code") { settings.retenues_total_code = v; }
     if let Some(v) = get("net_payer_code") { settings.net_payer_code = v; }
+    if let Some(v) = get("irg_net_code") { settings.irg_net_code = v; }
     if let Some(v) = get("cnas_employee_rate") { settings.cnas_employee_rate = v.parse().unwrap_or(9.0); }
     if let Some(v) = get("cnas_employer_rate") { settings.cnas_employer_rate = v.parse().unwrap_or(26.0); }
     if let Some(v) = get("irg_abattement_rate") { settings.irg_abattement_rate = v.parse().unwrap_or(0.40); }
@@ -387,6 +391,59 @@ pub fn bareme_irg(base: f64, prorata: f64) -> f64 {
     bareme_irg_period(base, prorata, "")
 }
 
+/// IRG calculation with optional salary_settings overrides.
+/// When settings are provided, uses the configurable abattement rate/min/max and
+/// exoneration threshold instead of the hardcoded defaults.
+fn bareme_irg_with_settings(base: f64, prorata: f64, period: &str, settings: Option<&SalarySettings>) -> f64 {
+    if base <= 0.0 || prorata <= 0.0 {
+        return 0.0;
+    }
+
+    // Base pleine avant prorata, arrondie au multiple de 10 DA inferieur
+    let full_base = base / prorata;
+    let rounded_base = (full_base / 10.0).floor() * 10.0;
+
+    let pre_2022 = is_pre_lf2022(period);
+    let raw = if pre_2022 {
+        bareme_brut_pre2022(rounded_base)
+    } else {
+        bareme_brut_lf2022(rounded_base)
+    };
+
+    // Use settings if provided, otherwise fall back to hardcoded defaults
+    let (abat_rate, abat_min, abat_max, exon_threshold) = match settings {
+        Some(s) => (s.irg_abattement_rate, s.irg_abattement_min, s.irg_abattement_max, s.irg_exoneration_threshold),
+        None => (0.40, 1000.0, 1500.0, 30000.0),
+    };
+
+    let abat = (raw * abat_rate).clamp(abat_min, abat_max);
+    let mut irg = raw - abat;
+
+    if !pre_2022 {
+        // Exoneration totale jusqu'au seuil configurable, puis zone de transition
+        if rounded_base <= exon_threshold {
+            irg = 0.0;
+        } else if rounded_base < exon_threshold + 5000.0 {
+            // Zone de transition: linear interpolation from 0 at threshold to full IRG at threshold+5000
+            // Formula: irg * (137/51) - (27925/8) for default 30000-35000 range
+            // Generalized: irg * (exon+5000)/(5000-irg_at_threshold) ... 
+            // For backward compatibility, use the original constants when threshold is 30000
+            if (exon_threshold - 30000.0).abs() < 0.01 {
+                irg = irg * (137.0 / 51.0) - (27925.0 / 8.0);
+            } else {
+                // Generic linear ramp: 0 at threshold, full irg at threshold+5000
+                let upper = exon_threshold + 5000.0;
+                irg = irg * (rounded_base - exon_threshold) / (upper - exon_threshold);
+            }
+        }
+    }
+
+    if irg < 0.0 {
+        irg = 0.0;
+    }
+    irg * prorata
+}
+
 /// Evaluate a PCPAIE formula expression
 /// Supports: R[NNN], T[NN], M, N, IRG(base, prorata), TOTAL(...), arithmetic + - * / ( )
 #[allow(dead_code)]
@@ -410,7 +467,7 @@ fn eval_formula(
     n_val: f64,
     period: &str,
 ) -> Result<f64, String> {
-    eval_formula_with_rubriques(formula, r_values, t_values, m_val, n_val, period, &[])
+    eval_formula_with_rubriques(formula, r_values, t_values, m_val, n_val, period, &[], None)
 }
 
 fn eval_formula_with_rubriques(
@@ -421,13 +478,14 @@ fn eval_formula_with_rubriques(
     n_val: f64,
     period: &str,
     rubriques: &[RubriqueDef],
+    settings: Option<&SalarySettings>,
 ) -> Result<f64, String> {
     let expr = formula.trim();
     if expr.is_empty() {
         return Ok(0.0);
     }
     // Parse and evaluate using a simple recursive descent parser
-    let mut parser = ExprParser::new(expr, r_values, t_values, m_val, n_val, period, rubriques);
+    let mut parser = ExprParser::new(expr, r_values, t_values, m_val, n_val, period, rubriques, settings);
     parser.parse_expr()
 }
 
@@ -440,6 +498,7 @@ struct ExprParser<'a> {
     n_val: f64,
     period: &'a str,
     rubriques: &'a [RubriqueDef],
+    settings: Option<&'a SalarySettings>,
 }
 
 impl<'a> ExprParser<'a> {
@@ -451,6 +510,7 @@ impl<'a> ExprParser<'a> {
         n_val: f64,
         period: &'a str,
         rubriques: &'a [RubriqueDef],
+        settings: Option<&'a SalarySettings>,
     ) -> Self {
         ExprParser {
             chars: expr.chars().collect(),
@@ -461,6 +521,7 @@ impl<'a> ExprParser<'a> {
             n_val,
             period,
             rubriques,
+            settings,
         }
     }
 
@@ -702,7 +763,7 @@ impl<'a> ExprParser<'a> {
                         if self.peek() == Some(')') {
                             self.advance();
                         }
-                        Ok(bareme_irg_period(base, prorata, self.period))
+                        Ok(bareme_irg_with_settings(base, prorata, self.period, self.settings))
                     } else {
                         Err("Expected '(' after IRG".into())
                     }
@@ -914,7 +975,7 @@ pub fn calculate_salary(
             r#"SELECT b.id, b.title, b.amount, b.is_percentage, b.rubrique_code, b.bonus_type,
                b.is_imposable, b.is_cotisable, b.is_absence_dependent, b.absence_divisor,
                b.amount_type, b.income_grid_min, b.income_grid_max, b.contract_types,
-               e.contrat, e.no_grille
+               e.contrat, e.no_grille, e.section, e.structure, e.unite, e.affectatio
                FROM bonuses b
                LEFT JOIN bonus_assignments ba ON ba.bonus_id = b.id AND ba.employee_id = ?
                LEFT JOIN employees e ON e.id = ?
@@ -1244,7 +1305,9 @@ pub fn calculate_salary(
         let is_emp_specific = emp_rub_codes.contains(code);
         let has_formula = rub.formule.as_ref().map_or(false, |f| !f.trim().is_empty());
         let is_manual = !rub.calcul || !has_formula;
-        if is_emp_specific || is_manual {
+        // Only pre-load manual rubriques or emp-specific manual rubriques.
+        // Calculated rubriques (calcul=1 with formula) are evaluated later by their formula.
+        if is_manual {
             if let Some(&(m_val, n_val)) = input_values.get(code) {
                 // For classe 3 (Nombre), 4, 7 (Compteur): user enters value as N (nombre).
                 // For classe 1 (Gain), 2 (Retenue), 5 (Taux): user enters value as M (montant).
@@ -1253,10 +1316,18 @@ pub fn calculate_salary(
                     _ => m_val,
                 };
                 r_values.insert(code.clone(), val);
-            } else if is_manual && rub.classe != 7.0 {
+            } else if is_emp_specific && rub.classe != 7.0 {
+                // Emp-specific manual rubrique with no input: default to 0
                 r_values.insert(code.clone(), 0.0);
             }
         }
+    }
+
+    // Sync T[07] with R001 from input_values if provided (overrides history value).
+    // This ensures formulas referencing T[07] (e.g. R005, R010) use the simulated
+    // base salary rather than the stale historical value.
+    if let Some(&(m_val, _)) = input_values.get("001") {
+        t_values.insert(7, m_val);
     }
 
     // Derive PCPAIE's day-count inputs for the period. These three are mutually
@@ -1326,9 +1397,11 @@ pub fn calculate_salary(
         // Get input values (M, N) for this rubrique
         let (m_val, n_val) = input_values.get(code).copied().unwrap_or((0.0, 0.0));
 
-        // For manual or employee-specific rubriques, use input value if available,
+        // For manual rubriques (calcul=0 or no formula), use input value if available,
         // otherwise fall back to pre-loaded history value. Skip formula evaluation.
-        if is_manual || is_emp_specific {
+        // Calculated rubriques (calcul=1 with formula) ALWAYS evaluate their formula,
+        // even if they appear in employee_rubriques — that just means visibility.
+        if is_manual {
             let amount = if has_input {
                 // Classe 3 (Nombre), 4, 7 (Compteur): value is in N. Others: value is in M.
                 match rub.classe as i64 {
@@ -1488,7 +1561,7 @@ pub fn calculate_salary(
             // Recompute R010 with updated T[09]
             if let Some(r010_rub) = rubriques.iter().find(|r| r.code == "010") {
                 if let Some(ref r010_formula) = r010_rub.formule {
-                    if let Ok(r010_new) = eval_formula_with_rubriques(r010_formula, &r_values, &t_values, 0.0, 0.0, period, &rubriques) {
+                    if let Ok(r010_new) = eval_formula_with_rubriques(r010_formula, &r_values, &t_values, 0.0, 0.0, period, &rubriques, Some(&sal_settings)) {
                         r_values.insert("010".to_string(), r010_new);
                     }
                 }
@@ -1498,7 +1571,7 @@ pub fn calculate_salary(
                 Some(f) => f,
                 None => continue,
             };
-            let mut amount = match eval_formula_with_rubriques(formula, &r_values, &t_values, m_val, n_val, period, &rubriques) {
+            let mut amount = match eval_formula_with_rubriques(formula, &r_values, &t_values, m_val, n_val, period, &rubriques, Some(&sal_settings)) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("Formula error for {}: {} - {}", code, formula, e);
@@ -1550,7 +1623,7 @@ pub fn calculate_salary(
             Some(f) => f,
             None => continue,
         };
-        let mut amount = match eval_formula_with_rubriques(formula, &r_values, &t_values, m_val, n_val, period, &rubriques) {
+        let mut amount = match eval_formula_with_rubriques(formula, &r_values, &t_values, m_val, n_val, period, &rubriques, Some(&sal_settings)) {
             Ok(v) => v,
             Err(e) => {
                 // Log error but continue with 0
@@ -1619,7 +1692,7 @@ pub fn calculate_salary(
     }
 
     // Extract totals from R values (matching PCPAIE output)
-    let total_brut = r_values.get("763").copied().unwrap_or(0.0);
+    let total_brut = r_values.get(&sal_settings.brut_total_code).copied().unwrap_or(0.0);
 
     // Recompute total_gains and total_retenues from actual lines.
     // R765/R767 rely on T[03]/T[04] which only accumulate rubriques with is_total=1.
@@ -1645,7 +1718,7 @@ pub fn calculate_salary(
 
     let base_cotisable = r_values.get(&sal_settings.cotisable_total_code).copied().unwrap_or(0.0);
     let base_imposable = r_values.get(&sal_settings.imposable_total_code).copied().unwrap_or(0.0);
-    let irg = r_values.get("660").copied().unwrap_or(0.0);
+    let irg = r_values.get(&sal_settings.irg_net_code).copied().unwrap_or(0.0);
     let net_payer = total_gains - total_retenues;
 
     // Export key T[] values for the simulator display
@@ -1725,12 +1798,14 @@ fn accumulate_t(
             *t_values.entry(1).or_insert(0.0) -= abs_amount; // T[01] -= cotisable retenue (monthly)
             *t_values.entry(58).or_insert(0.0) -= abs_amount; // T[58] -= cotisable for IRG (monthly)
         }
+        if rub.is_secu_s && rub.is_regular {
+            *t_values.entry(57).or_insert(0.0) -= abs_amount; // T[57] -= cotisable for régul
+        }
         if rub.is_impos {
             if !rub.is_regular {
                 *t_values.entry(43).or_insert(0.0) -= abs_amount; // T[43] -= imposable (monthly)
             } else {
                 *t_values.entry(41).or_insert(0.0) -= abs_amount; // T[41] -= imposable for régul
-                *t_values.entry(57).or_insert(0.0) -= abs_amount; // T[57] -= cotisable for régul
             }
         }
         return;
@@ -1745,12 +1820,14 @@ fn accumulate_t(
         *t_values.entry(58).or_insert(0.0) += amount; // T[58] = cotisable for IRG (monthly)
         *cotisable_gains += amount;
     }
+    if rub.is_secu_s && rub.is_regular {
+        *t_values.entry(57).or_insert(0.0) += amount; // T[57] = cotisable for régul
+    }
     if rub.is_impos {
         if !rub.is_regular {
             *t_values.entry(43).or_insert(0.0) += amount; // T[43] = imposable brut (monthly)
         } else {
             *t_values.entry(41).or_insert(0.0) += amount; // T[41] = imposable for régul
-            *t_values.entry(57).or_insert(0.0) += amount; // T[57] = cotisable for régul
         }
     }
     // T[03] = total gains (only is_total classe 1 rubriques, both monthly and régul)
