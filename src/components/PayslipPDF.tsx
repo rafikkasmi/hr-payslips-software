@@ -40,13 +40,22 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
       })()
     : result.period;
 
-  // Only non-zero lines with ord_bul > 0 (PCPAIE bulletin display flag), split into gains vs retenues
-  // Lines without ord_bul (legacy/historical) default to showing if amount != 0
-  const activeLines = result.lines.filter(l => l.amount !== 0 && (l.ord_bul === undefined || l.ord_bul === null || l.ord_bul > 0));
-  // Sort by ord_bul (ascending), fallback to original order
-  const sortedLines = [...activeLines].sort((a, b) => (a.ord_bul ?? 999) - (b.ord_bul ?? 999));
+  // Show ALL non-zero lines. ord_bul is used for SORTING only, not filtering.
+  // PCPAIE uses ord_bul=0 as default (not "hidden"), so we must NOT filter by ord_bul > 0.
+  const activeLines = result.lines.filter(l => l.amount !== 0);
+  // Sort by ord_bul when > 0, otherwise keep original order (by ord_clc)
+  const sortedLines = [...activeLines].sort((a, b) => {
+    const aOrd = a.ord_bul ?? 0;
+    const bOrd = b.ord_bul ?? 0;
+    if (aOrd > 0 && bOrd > 0) return aOrd - bOrd;
+    if (aOrd > 0) return -1;
+    if (bOrd > 0) return 1;
+    return 0; // keep original order
+  });
   const gains = sortedLines.filter(l => l.classe === 1 && l.amount > 0);
   const retenues = sortedLines.filter(l => l.classe === 2 || (l.classe === 1 && l.amount < 0));
+  // Info lines: classe=0 (or other non-1/non-2) with non-zero amount — shown in separate section
+  const infoLines = sortedLines.filter(l => l.classe !== 1 && l.classe !== 2);
   // Key info lines only (brut, cotisable, imposable, net — skip rates/coefficients)
   const keyInfoCodes = ["763", "765", "767", "770", "807", "817", "819", "824"];
   const keyInfos = sortedLines.filter(l => keyInfoCodes.includes(l.code));
@@ -122,7 +131,7 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
                   {gains.map((line) => (
                     <tr key={line.code} className="border-b border-gray-100">
                       <td className="py-0.5 font-mono text-gray-400 w-8">{line.code}</td>
-                      <td className="py-0.5 text-gray-700">{line.libelle}</td>
+                      <td className="py-0.5 text-gray-700">{line.libelle || `(R${line.code})`}</td>
                       <td className="py-0.5 text-right text-gray-500 w-16">{line.base_value != null && line.base_value !== 0 ? formatCurrency(line.base_value) : "—"}</td>
                       <td className="py-0.5 text-right text-gray-500 w-14">{line.taux_value != null && line.taux_value !== 0 ? (line.taux_value < 1 ? line.taux_value.toFixed(2) : line.taux_value.toFixed(0)) : "—"}</td>
                       <td className="py-0.5 text-right font-medium text-gray-900 w-20">{formatCurrency(line.amount)}</td>
@@ -158,7 +167,7 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
                   {retenues.map((line) => (
                     <tr key={line.code} className="border-b border-gray-100">
                       <td className="py-0.5 font-mono text-gray-400 w-8">{line.code}</td>
-                      <td className="py-0.5 text-gray-700">{line.libelle}</td>
+                      <td className="py-0.5 text-gray-700">{line.libelle || `(R${line.code})`}</td>
                       <td className="py-0.5 text-right text-gray-500 w-16">{line.base_value != null && line.base_value !== 0 ? formatCurrency(line.base_value) : "—"}</td>
                       <td className="py-0.5 text-right text-gray-500 w-14">{line.taux_value != null && line.taux_value !== 0 ? (line.taux_value < 1 ? line.taux_value.toFixed(2) : line.taux_value.toFixed(0)) : "—"}</td>
                       <td className="py-0.5 text-right font-medium text-red-600 w-20">{formatCurrency(Math.abs(line.amount))}</td>
@@ -177,6 +186,24 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
               </table>
             </div>
           </div>
+
+          {/* Info lines (classe=0, 3, 4, 5, 7 — not gains or retenues but with non-zero amount) */}
+          {infoLines.length > 0 && (
+            <div className="mb-3 rounded border border-gray-200 overflow-hidden">
+              <div className="bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600">Informations</div>
+              <table className="w-full text-xs">
+                <tbody>
+                  {infoLines.map((line) => (
+                    <tr key={line.code} className="border-b border-gray-100">
+                      <td className="py-0.5 pl-3 font-mono text-gray-400 w-8">{line.code}</td>
+                      <td className="py-0.5 text-gray-700">{line.libelle || `(R${line.code})`}</td>
+                      <td className="py-0.5 pr-3 text-right font-medium text-gray-600 w-20">{formatCurrency(line.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Compact totals bar */}
           <div className="grid grid-cols-4 gap-2 mb-3 text-xs">
@@ -204,7 +231,7 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
               <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
                 {keyInfos.map((line) => (
                   <span key={line.code} className="text-gray-600">
-                    <span className="font-medium">{line.libelle}:</span>{" "}
+                    <span className="font-medium">{line.libelle || `(R${line.code})`}:</span>{" "}
                     <span className="font-semibold text-gray-900">{formatCurrency(line.amount)}</span>
                   </span>
                 ))}
@@ -246,7 +273,7 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
                     {result.lines.filter(l => l.formula || l.is_input || l.amount !== 0).map((line) => (
                       <tr key={line.code} className={line.is_input ? "bg-blue-50/30" : ""}>
                         <td className="px-2 py-1 font-mono text-gray-500">{line.code}</td>
-                        <td className="px-2 py-1 text-gray-700">{line.libelle}</td>
+                        <td className="px-2 py-1 text-gray-700">{line.libelle || `(R${line.code})`}</td>
                         <td className="px-2 py-1 text-right font-medium text-gray-900">{formatCurrency(line.amount)}</td>
                         <td className="px-2 py-1 font-mono text-gray-500 text-[10px]">{line.formula ?? (line.is_input ? "(saisie)" : "—")}</td>
                         <td className="px-2 py-1 font-mono text-gray-600 text-[10px]">{line.evaluated_formula ?? "—"}</td>

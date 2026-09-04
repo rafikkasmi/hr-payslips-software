@@ -185,8 +185,15 @@ export function ResultsTable() {
                                 <h4 className="text-xs font-semibold text-gray-500 mb-2">GAINS</h4>
                                 <div className="space-y-1 max-h-48 overflow-y-auto">
                                   {result.lines
-                                    .filter(l => l.amount > 0 && (l.ord_bul === undefined || l.ord_bul === null || l.ord_bul > 0))
-                                    .sort((a, b) => (a.ord_bul ?? 999) - (b.ord_bul ?? 999))
+                                    .filter(l => l.amount > 0 && l.classe === 1)
+                                    .sort((a, b) => {
+                                      const aOrd = a.ord_bul ?? 0;
+                                      const bOrd = b.ord_bul ?? 0;
+                                      if (aOrd > 0 && bOrd > 0) return aOrd - bOrd;
+                                      if (aOrd > 0) return -1;
+                                      if (bOrd > 0) return 1;
+                                      return 0;
+                                    })
                                     .map((line) => (
                                     <div key={line.code} className="flex justify-between text-xs">
                                       <span className="font-mono text-gray-500 w-10">{line.code}</span>
@@ -200,8 +207,15 @@ export function ResultsTable() {
                                 <h4 className="text-xs font-semibold text-gray-500 mb-2">RETENUES</h4>
                                 <div className="space-y-1 max-h-48 overflow-y-auto">
                                   {result.lines
-                                    .filter(l => l.amount < 0 && (l.ord_bul === undefined || l.ord_bul === null || l.ord_bul > 0))
-                                    .sort((a, b) => (a.ord_bul ?? 999) - (b.ord_bul ?? 999))
+                                    .filter(l => l.amount < 0 && (l.classe === 2 || l.classe === 1))
+                                    .sort((a, b) => {
+                                      const aOrd = a.ord_bul ?? 0;
+                                      const bOrd = b.ord_bul ?? 0;
+                                      if (aOrd > 0 && bOrd > 0) return aOrd - bOrd;
+                                      if (aOrd > 0) return -1;
+                                      if (bOrd > 0) return 1;
+                                      return 0;
+                                    })
                                     .map((line) => (
                                     <div key={line.code} className="flex justify-between text-xs">
                                       <span className="font-mono text-gray-500 w-10">{line.code}</span>
