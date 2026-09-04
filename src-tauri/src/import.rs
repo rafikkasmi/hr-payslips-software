@@ -40,6 +40,13 @@ pub fn import_pcpaie(
     });
     let rubriques_count = import_rubriques(app_conn, &src)?;
 
+    // 1b. Enrich rubrique libelles from MCC files (WDOC/MULTI_COLONNES/*.MCC)
+    // MCC files contain user-defined labels that are often empty in RUBRIQUEX.DTA
+    // Derive the PCPAIE folder from the db path's parent directory
+    if let Some(parent) = Path::new(pcpaie_path).parent() {
+        let _ = crate::native_import::import_mcc_libelles(app_conn, &parent.to_string_lossy());
+    }
+
     // 2. Import employees (PERS0 + PERS2)
     progress_cb(ImportProgress {
         step: "employees".into(),

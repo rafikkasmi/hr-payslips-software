@@ -242,6 +242,23 @@ pub fn import_native_pcpaie(
 
     progress("phase1", "done", 7, 7, "Phase 1 terminée", 10.0);
 
+    // Enrich rubrique libelles from MCC files (WDOC/MULTI_COLONNES/*.MCC)
+    // MCC files contain user-defined labels that are often empty in RUBRIQUEX.DTA
+    progress("phase1", "mcc", 0, 1, "WDOC/MULTI_COLONNES/*.MCC — libellés de rubriques...", 10.0);
+    match import_mcc_libelles(app_conn, folder_path) {
+        Ok(n) => {
+            if n > 0 {
+                progress("phase1", "mcc", 1, 1, &format!("MCC — {} libellés enrichis", n), 10.0);
+            } else {
+                progress("phase1", "mcc", 1, 1, "MCC — aucun fichier trouvé", 10.0);
+            }
+        }
+        Err(e) => {
+            errors.push(format!("MCC libelles: {}", e));
+            progress("phase1", "mcc", 1, 1, "MCC — erreur", 10.0);
+        }
+    }
+
     // ============================================================
     // PHASE 2: PERS0 — employees (sequential, all 80 fields)
     // ============================================================
@@ -1105,4 +1122,165 @@ fn import_conges_parallel(app: &Connection, path: &str, progress: ProgressCb) ->
     let final_count = inserted_total.load(Ordering::Relaxed);
     progress("phase4", "conges", final_count, total, &format!("CONGES.DTA — {} congés importés", final_count), 60.0);
     Ok(final_count)
+}
+
+// ================================================================
+// MCC libelles — import rubrique labels from WDOC/MULTI_COLONNES/*.MCC files
+// MCC files are UTF-16-LE encoded INI-like configs that contain user-defined
+// column labels for reports. They often have libelles that are empty in RUBRIQUEX.DTA.
+// ================================================================
+
+/// Find all .MCC files in a directory and its subdirectories (case-insensitive).
+fn find_mcc_files(folder: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let path = std::path::Path::new(folder);
+    if let Ok(entries) = path.read_dir() {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let p = entry.path();
+            if p.is_dir() {
+                // Recurse into subdirectories (WDOC, MULTI_COLONNES, etc.)
+                let sub = p.to_string_lossy().to_string();
+                result.extend(find_mcc_files(&sub));
+            } else if p.is_file() {
+                let name = entry.file_name().to_string_lossy().to_uppercase();
+                if name.ends_with(".MCC") {
+                    result.push(p.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Parse a single MCC file and extract (code, libelle) pairs.
+/// MCC files are UTF-16-LE encoded with INI-like sections:
+///   [BEGIN SECTION DATA]
+///   CODE_COLONNE=R351
+///   ENTETE_L1=R351
+///   ENTETE_L2=INDEM DE CONTAGION
+///   ...
+/// When L1 is the rubrique code itself (e.g. "R351"), L2 is the full label.
+/// When L1 is a partial label (e.g. "SALAIRE"), the full label is L1 + " " + L2.
+fn parse_mcc_file(path: &str) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return entries,
+    };
+
+    // MCC files are UTF-16-LE encoded; decode accordingly
+    let text = if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        // BOM + UTF-16-LE
+        let u16s: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s)
+    } else if bytes.len() % 2 == 0 {
+        // Try UTF-16-LE without BOM
+        let u16s: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s)
+    } else {
+        String::from_utf8_lossy(&bytes).to_string()
+    };
+
+    // Parse INI-like sections: CODE_COLONNE=Rxxx, ENTETE_L1=..., ENTETE_L2=...
+    let mut current_code: Option<String> = None;
+    let mut current_l1: Option<String> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("CODE_COLONNE=") {
+            current_code = Some(line["CODE_COLONNE=".len()..].trim().to_string());
+            current_l1 = None;
+        } else if line.starts_with("ENTETE_L1=") {
+            current_l1 = Some(line["ENTETE_L1=".len()..].trim().to_string());
+        } else if line.starts_with("ENTETE_L2=") {
+            if let Some(ref code) = current_code {
+                let l2 = line["ENTETE_L2=".len()..].trim().to_string();
+                // Skip R+/R- variants — they're derived from the base libelle
+                if l2.is_empty() || l2.starts_with("(R+") || l2.starts_with("(R-") {
+                    continue;
+                }
+                // Build the full libelle:
+                // - If L1 is the code itself (e.g. "R351"), use L2 only
+                // - If L1 is a partial label (e.g. "SALAIRE"), combine L1 + " " + L2
+                let libelle = match &current_l1 {
+                    Some(l1) if l1.eq_ignore_ascii_case(code) || l1.is_empty() => l2.clone(),
+                    Some(l1) => {
+                        // L1 is a partial label — combine
+                        // Skip if L1 itself is an R+/R- prefix
+                        if l1.starts_with("(R+") || l1.starts_with("(R-") {
+                            l2.clone()
+                        } else {
+                            format!("{} {}", l1, l2)
+                        }
+                    }
+                    None => l2.clone(),
+                };
+                entries.push((code.clone(), libelle));
+            }
+        }
+    }
+
+    entries
+}
+
+/// Import libelles from MCC files in the PCPAIE folder.
+/// Only updates rubriques that have an EMPTY libelle (does not overwrite existing ones).
+/// Returns the number of rubriques updated.
+pub fn import_mcc_libelles(app: &Connection, folder_path: &str) -> Result<usize, String> {
+    // Look for MCC files in WDOC/MULTI_COLONNES/ and any subdirectory
+    let mcc_files = find_mcc_files(folder_path);
+
+    if mcc_files.is_empty() {
+        return Ok(0);
+    }
+
+    // Collect all (code, libelle) pairs from all MCC files
+    // Use a HashMap to keep the first libelle found for each code (most common one)
+    use std::collections::HashMap;
+    let mut libelle_map: HashMap<String, String> = HashMap::new();
+
+    for mcc_path in &mcc_files {
+        let entries = parse_mcc_file(mcc_path);
+        for (code, libelle) in entries {
+            // Normalize code: strip "R" prefix, pad to 3 digits
+            let normalized = if code.starts_with('R') || code.starts_with('r') {
+                let num = &code[1..];
+                match num.parse::<u32>() {
+                    Ok(n) => format!("{:03}", n),
+                    Err(_) => code.clone(),
+                }
+            } else {
+                code.clone()
+            };
+            // Only keep the first libelle for each code
+            libelle_map.entry(normalized).or_insert(libelle);
+        }
+    }
+
+    if libelle_map.is_empty() {
+        return Ok(0);
+    }
+
+    // Update rubriques that have empty libelle
+    let mut updated = 0usize;
+    app.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+
+    for (code, libelle) in &libelle_map {
+        // Only update if current libelle is empty
+        let rows = app.execute(
+            "UPDATE rubriques SET libelle = ?1 WHERE code = ?2 AND (libelle IS NULL OR TRIM(libelle) = '' OR libelle = '')",
+            rusqlite::params![libelle, code],
+        ).map_err(|e| e.to_string())?;
+        updated += rows;
+    }
+
+    app.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+
+    Ok(updated)
 }
