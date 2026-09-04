@@ -28,6 +28,16 @@ interface Rubrique {
   manuelle: number | null;
   init_val: number | null;
   ord_clc: number | null;
+  // Extended fields
+  ord_bul?: number | null;
+  precision?: string | null;
+  v_min?: number | null;
+  v_max?: number | null;
+  n_arrondir?: number | null;
+  is_regular?: number | null;
+  is_locked?: number | null;
+  calcul?: number | null;
+  alibelle?: string | null;
 }
 
 export function RubriquesPage() {
@@ -48,6 +58,14 @@ export function RubriquesPage() {
   const [editInitVal, setEditInitVal] = useState(0);
   const [editOrdClc, setEditOrdClc] = useState(0);
   const [saving, setSaving] = useState(false);
+  // Extended edit fields
+  const [editOrdBul, setEditOrdBul] = useState(0);
+  const [editPrecision, setEditPrecision] = useState("");
+  const [editVMin, setEditVMin] = useState(0);
+  const [editVMax, setEditVMax] = useState(0);
+  const [editIsRegular, setEditIsRegular] = useState(false);
+  const [editIsLocked, setEditIsLocked] = useState(false);
+  const [editCalcul, setEditCalcul] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ code: string; success: boolean; value?: number; error?: string } | null>(null);
   const [creating, setCreating] = useState(false);
@@ -97,6 +115,14 @@ export function RubriquesPage() {
     setEditIsTotal(r.is_total === 1);
     setEditInitVal(r.init_val ?? 0);
     setEditOrdClc(r.ord_clc ?? 0);
+    // Extended fields
+    setEditOrdBul(r.ord_bul ?? 0);
+    setEditPrecision(r.precision ?? "");
+    setEditVMin(r.v_min ?? 0);
+    setEditVMax(r.v_max ?? 0);
+    setEditIsRegular(r.is_regular === 1);
+    setEditIsLocked(r.is_locked === 1);
+    setEditCalcul(r.calcul === 1);
     setTestResult(null);
   };
 
@@ -119,6 +145,13 @@ export function RubriquesPage() {
         is_total: editIsTotal ? 1 : 0,
         init_val: editInitVal,
         ord_clc: editOrdClc,
+        ord_bul: editOrdBul,
+        precision: editPrecision || null,
+        v_min: editVMin,
+        v_max: editVMax,
+        is_regular: editIsRegular ? 1 : 0,
+        is_locked: editIsLocked ? 1 : 0,
+        calcul: editCalcul ? 1 : 0,
       });
       setMessage({ type: "success", text: `Rubrique R${editingCode} mise à jour` });
       setEditingCode(null);
@@ -288,6 +321,7 @@ export function RubriquesPage() {
                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Formule</th>
                 <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">Flags</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Ordre</th>
+                <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Ord. Bul.</th>
                 <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">Actions</th>
               </tr>
             </thead>
@@ -330,6 +364,9 @@ export function RubriquesPage() {
                             <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={editIsImpos} onChange={(e) => setEditIsImpos(e.target.checked)} /> Impos</label>
                             <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={editIsSecuS} onChange={(e) => setEditIsSecuS(e.target.checked)} /> Secu</label>
                             <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={editIsTotal} onChange={(e) => setEditIsTotal(e.target.checked)} /> Total</label>
+                            <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={editIsRegular} onChange={(e) => setEditIsRegular(e.target.checked)} /> Régul</label>
+                            <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={editIsLocked} onChange={(e) => setEditIsLocked(e.target.checked)} /> Locked</label>
+                            <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={editCalcul} onChange={(e) => setEditCalcul(e.target.checked)} /> Calcul</label>
                           </>
                         ) : (
                           <>
@@ -338,6 +375,9 @@ export function RubriquesPage() {
                             {r.is_secu_s === 1 && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-xs text-purple-700">S</span>}
                             {r.is_total === 1 && <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700">T</span>}
                             {r.manuelle === 1 && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-xs text-orange-700">M</span>}
+                            {r.is_regular === 1 && <span className="rounded bg-cyan-100 px-1.5 py-0.5 text-xs text-cyan-700">R</span>}
+                            {r.is_locked === 1 && <span className="rounded bg-gray-300 px-1.5 py-0.5 text-xs text-gray-700">L</span>}
+                            {r.calcul === 1 && <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs text-indigo-700">C</span>}
                           </>
                         )}
                       </div>
@@ -347,6 +387,15 @@ export function RubriquesPage() {
                         <input type="number" value={editOrdClc} onChange={(e) => setEditOrdClc(Number(e.target.value))} className="w-20 rounded border border-gray-300 px-2 py-1 text-sm text-right" />
                       ) : (
                         r.ord_clc ?? "—"
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-sm text-right text-gray-500">
+                      {isEditing ? (
+                        <input type="number" value={editOrdBul} onChange={(e) => setEditOrdBul(Number(e.target.value))} className="w-20 rounded border border-gray-300 px-2 py-1 text-sm text-right" title="Ordre d'affichage sur le bulletin (0 = non affiché)" />
+                      ) : (
+                        <span className={r.ord_bul ? "text-gray-700" : "text-gray-300"} title={r.ord_bul ? "Affiché sur le bulletin" : "Non affiché sur le bulletin"}>
+                          {r.ord_bul ?? "—"}
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2">

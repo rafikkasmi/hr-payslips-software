@@ -40,13 +40,16 @@ export function PayslipPDF({ result, companyName = "HAMTECH", onClose }: Payslip
       })()
     : result.period;
 
-  // Only non-zero lines, split into gains vs retenues
-  const activeLines = result.lines.filter(l => l.amount !== 0);
-  const gains = activeLines.filter(l => l.classe === 1 && l.amount > 0);
-  const retenues = activeLines.filter(l => l.classe === 2 || (l.classe === 1 && l.amount < 0));
+  // Only non-zero lines with ord_bul > 0 (PCPAIE bulletin display flag), split into gains vs retenues
+  // Lines without ord_bul (legacy/historical) default to showing if amount != 0
+  const activeLines = result.lines.filter(l => l.amount !== 0 && (l.ord_bul === undefined || l.ord_bul === null || l.ord_bul > 0));
+  // Sort by ord_bul (ascending), fallback to original order
+  const sortedLines = [...activeLines].sort((a, b) => (a.ord_bul ?? 999) - (b.ord_bul ?? 999));
+  const gains = sortedLines.filter(l => l.classe === 1 && l.amount > 0);
+  const retenues = sortedLines.filter(l => l.classe === 2 || (l.classe === 1 && l.amount < 0));
   // Key info lines only (brut, cotisable, imposable, net — skip rates/coefficients)
   const keyInfoCodes = ["763", "765", "767", "770", "807", "817", "819", "824"];
-  const keyInfos = activeLines.filter(l => keyInfoCodes.includes(l.code));
+  const keyInfos = sortedLines.filter(l => keyInfoCodes.includes(l.code));
 
   // Only show applied bonuses WITHOUT a rubrique_code — those with one are already in the calc lines
   const bonusGains = (result.applied_bonuses ?? []).filter(b => b.computed_amount > 0 && !b.rubrique_code);

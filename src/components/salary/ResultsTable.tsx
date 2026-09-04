@@ -184,7 +184,10 @@ export function ResultsTable() {
                               <div>
                                 <h4 className="text-xs font-semibold text-gray-500 mb-2">GAINS</h4>
                                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                                  {result.lines.filter(l => l.amount > 0).map((line) => (
+                                  {result.lines
+                                    .filter(l => l.amount > 0 && (l.ord_bul === undefined || l.ord_bul === null || l.ord_bul > 0))
+                                    .sort((a, b) => (a.ord_bul ?? 999) - (b.ord_bul ?? 999))
+                                    .map((line) => (
                                     <div key={line.code} className="flex justify-between text-xs">
                                       <span className="font-mono text-gray-500 w-10">{line.code}</span>
                                       <span className="text-gray-700 flex-1 ml-2">{line.libelle}</span>
@@ -196,7 +199,10 @@ export function ResultsTable() {
                               <div>
                                 <h4 className="text-xs font-semibold text-gray-500 mb-2">RETENUES</h4>
                                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                                  {result.lines.filter(l => l.amount < 0).map((line) => (
+                                  {result.lines
+                                    .filter(l => l.amount < 0 && (l.ord_bul === undefined || l.ord_bul === null || l.ord_bul > 0))
+                                    .sort((a, b) => (a.ord_bul ?? 999) - (b.ord_bul ?? 999))
+                                    .map((line) => (
                                     <div key={line.code} className="flex justify-between text-xs">
                                       <span className="font-mono text-gray-500 w-10">{line.code}</span>
                                       <span className="text-gray-700 flex-1 ml-2">{line.libelle}</span>
@@ -391,7 +397,14 @@ function BulletinButton({ h, calcResults, selectedPeriod, setPayslipPreview }: {
           matricule: h.matricule ?? "",
           employee_name: `${h.nom ?? ""} ${h.prenom ?? ""}`.trim(),
           period: h.period ?? selectedPeriod,
-          lines: hp.lines.map((l) => ({ code: l.code, libelle: l.code, classe: l.amount > 0 ? 1 : 2, amount: l.amount, is_input: false })),
+          lines: hp.lines.map((l) => ({
+            code: l.code,
+            libelle: l.libelle ?? l.code,
+            classe: l.classe ?? (l.amount > 0 ? 1 : 2),
+            amount: l.amount,
+            is_input: false,
+            ord_bul: l.ord_bul,
+          })),
           total_brut: hp.total_brut,
           total_gains: hp.total_brut,
           total_retenues: hp.total_retenues,

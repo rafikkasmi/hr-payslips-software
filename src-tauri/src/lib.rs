@@ -1763,7 +1763,8 @@ async fn get_rubriques(state: State<'_, AppState>) -> Result<Vec<serde_json::Val
     let mut stmt = conn
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
-               is_total, is_imp, manuelle, init_val, ord_clc, calcul
+               is_total, is_imp, manuelle, init_val, ord_clc, calcul,
+               ord_bul, precision, v_min, v_max, is_regular, is_locked, alibelle, n_arrondir
                FROM rubriques
                WHERE libelle IS NOT NULL AND TRIM(libelle) != ''
                ORDER BY CAST(code AS INTEGER)"#,
@@ -1786,6 +1787,14 @@ async fn get_rubriques(state: State<'_, AppState>) -> Result<Vec<serde_json::Val
                 "init_val": row.get::<_, Option<f64>>(10)?,
                 "ord_clc": row.get::<_, Option<f64>>(11)?,
                 "calcul": row.get::<_, Option<i64>>(12)?,
+                "ord_bul": row.get::<_, Option<f64>>(13)?,
+                "precision": row.get::<_, Option<String>>(14)?,
+                "v_min": row.get::<_, Option<f64>>(15)?,
+                "v_max": row.get::<_, Option<f64>>(16)?,
+                "is_regular": row.get::<_, Option<i64>>(17)?,
+                "is_locked": row.get::<_, Option<i64>>(18)?,
+                "alibelle": row.get::<_, Option<String>>(19)?,
+                "n_arrondir": row.get::<_, Option<i64>>(20)?,
             }))
         })
         .map_err(|e| e.to_string())?;
@@ -1862,6 +1871,14 @@ fn update_rubrique(
     manuelle: Option<i64>,
     init_val: Option<f64>,
     ord_clc: Option<f64>,
+    // Extended fields
+    ord_bul: Option<f64>,
+    precision: Option<String>,
+    v_min: Option<f64>,
+    v_max: Option<f64>,
+    is_regular: Option<i64>,
+    is_locked: Option<i64>,
+    calcul: Option<i64>,
 ) -> Result<(), String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut sets: Vec<String> = Vec::new();
@@ -1878,6 +1895,13 @@ fn update_rubrique(
     if let Some(v) = manuelle { sets.push("manuelle = ?".into()); params.push(Box::new(v)); }
     if let Some(v) = init_val { sets.push("init_val = ?".into()); params.push(Box::new(v)); }
     if let Some(v) = ord_clc { sets.push("ord_clc = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = ord_bul { sets.push("ord_bul = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = precision { sets.push("precision = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = v_min { sets.push("v_min = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = v_max { sets.push("v_max = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = is_regular { sets.push("is_regular = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = is_locked { sets.push("is_locked = ?".into()); params.push(Box::new(v)); }
+    if let Some(v) = calcul { sets.push("calcul = ?".into()); params.push(Box::new(v)); }
 
     if sets.is_empty() {
         return Ok(());
@@ -2390,6 +2414,25 @@ fn get_historical_payslip(
         patterns[0], patterns[1], patterns[2]
     );
 
+    // Pre-load rubrique metadata for enrichment (ord_bul, classe, libelle)
+    let rub_meta: std::collections::HashMap<String, (f64, Option<String>, f64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT CAST(code AS INTEGER), classe, libelle, ord_bul FROM rubriques"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            let code_int: i64 = row.get(0)?;
+            let classe: Option<f64> = row.get(1)?;
+            let libelle: Option<String> = row.get(2)?;
+            let ord_bul: Option<f64> = row.get(3)?;
+            Ok((format!("{:03}", code_int), (classe.unwrap_or(0.0), libelle, ord_bul.unwrap_or(0.0))))
+        }).map_err(|e| e.to_string())?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            if let Ok((k, v)) = row { map.insert(k, v); }
+        }
+        map
+    };
+
     let row = conn.query_row(&sql, [employee_id], |r| {
                 let montants: Option<String> = r.get(3)?;
                 let lines: Vec<serde_json::Value> = if let Some(ref m) = montants {
@@ -2402,9 +2445,18 @@ fn get_historical_payslip(
                     lines
                         .into_iter()
                         .map(|(code, amount)| {
+                            // Strip "R" prefix to match rubrique code
+                            let code_num = code.trim_start_matches('R');
+                            let code_padded = format!("{:03}", code_num.parse::<u32>().unwrap_or(0));
+                            let (classe, libelle, ord_bul) = rub_meta.get(&code_padded)
+                                .map(|(c, l, o)| (*c, l.clone(), *o))
+                                .unwrap_or((if amount >= 0.0 { 1.0 } else { 2.0 }, None, 0.0));
                             serde_json::json!({
                                 "code": code,
                                 "amount": amount,
+                                "classe": classe,
+                                "libelle": libelle,
+                                "ord_bul": ord_bul,
                             })
                         })
                         .collect()

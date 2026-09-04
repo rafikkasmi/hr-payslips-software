@@ -103,6 +103,12 @@ export function SimulatorPage() {
           init_val: Number(r.init_val ?? 0),
           formule: (r.formule as string | null) ?? null,
           calcul: Number(r.calcul ?? 0),
+          v_min: r.v_min !== undefined ? Number(r.v_min) : undefined,
+          v_max: r.v_max !== undefined ? Number(r.v_max) : undefined,
+          ord_bul: r.ord_bul !== undefined ? Number(r.ord_bul) : undefined,
+          precision: (r.precision as string | null) ?? null,
+          is_regular: r.is_regular !== undefined ? Number(r.is_regular) : undefined,
+          is_locked: r.is_locked !== undefined ? Number(r.is_locked) : undefined,
         }));
         setAllRubriques(mapped);
       } catch (e) {
@@ -486,6 +492,12 @@ export function SimulatorPage() {
                       const field = (vtype === "M" || vtype === "T") ? "montant" : "nombre";
                       const value = r[field] || "";
                       const isCalc = r.calcul === 1;
+                      // Look up meta for v_min/v_max validation
+                      const meta = allRubriques.find(m => m.code === r.code);
+                      const vMin = meta?.v_min;
+                      const vMax = meta?.v_max;
+                      const outOfRange = (vMin !== undefined && vMin !== 0 && value !== "" && Number(value) < vMin) ||
+                                         (vMax !== undefined && vMax !== 0 && value !== "" && Number(value) > vMax);
                       return (
                         <tr key={r.code} className={`border-b border-gray-50 hover:bg-blue-50/30 ${isParam ? "bg-gray-50/30" : r.classe === 2 ? "bg-red-50/20" : ""} ${isCalc ? "opacity-60" : ""}`}>
                           <td className="px-2 py-1 font-mono text-gray-400">{r.code}</td>
@@ -507,8 +519,11 @@ export function SimulatorPage() {
                                 type="number"
                                 value={value}
                                 onChange={e => updateSimValue(r.code, field, parseFloat(e.target.value) || 0)}
-                                className={`w-full rounded border px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300 ${isParam ? "border-gray-200 bg-gray-50/50" : "border-gray-200"}`}
+                                className={`w-full rounded border px-1 py-0.5 text-right text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300 ${outOfRange ? "border-red-400 bg-red-50" : isParam ? "border-gray-200 bg-gray-50/50" : "border-gray-200"}`}
                                 placeholder="0"
+                                min={vMin !== undefined && vMin !== 0 ? vMin : undefined}
+                                max={vMax !== undefined && vMax !== 0 ? vMax : undefined}
+                                title={outOfRange ? `Valeur hors plage [${vMin ?? "—"} ; ${vMax ?? "—"}]` : undefined}
                               />
                             )}
                           </td>

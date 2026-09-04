@@ -143,6 +143,8 @@ export interface CalcLine {
   base_value?: number | null;
   taux_value?: number | null;
   formule?: string | null;
+  ord_bul?: number;
+  precision?: string | null;
 }
 
 export interface DebugLogEntry {
@@ -252,6 +254,10 @@ export interface SalaryHistoryEntry {
 export interface HistoricalPayslipLine {
   code: string;
   amount: number;
+  // Enriched from rubriques table
+  classe?: number;
+  libelle?: string | null;
+  ord_bul?: number;
 }
 
 export interface HistoricalPayslip {
@@ -603,6 +609,14 @@ export const api = {
     manuelle?: number | null;
     init_val?: number | null;
     ord_clc?: number | null;
+    // Extended fields
+    ord_bul?: number | null;
+    precision?: string | null;
+    v_min?: number | null;
+    v_max?: number | null;
+    is_regular?: number | null;
+    is_locked?: number | null;
+    calcul?: number | null;
   }) =>
     invoke<void>("update_rubrique", {
       code,
@@ -617,6 +631,13 @@ export const api = {
       manuelle: updates.manuelle ?? null,
       initVal: updates.init_val ?? null,
       ordClc: updates.ord_clc ?? null,
+      ordBul: updates.ord_bul ?? null,
+      precision: updates.precision ?? null,
+      vMin: updates.v_min ?? null,
+      vMax: updates.v_max ?? null,
+      isRegular: updates.is_regular ?? null,
+      isLocked: updates.is_locked ?? null,
+      calcul: updates.calcul ?? null,
     }),
 
   updateRubriqueFlags: (code: string, flags: { isSecuS?: boolean; isImpos?: boolean; isBrut?: boolean }) =>

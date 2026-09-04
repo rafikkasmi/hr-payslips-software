@@ -15,11 +15,14 @@ function fmtPeriod(period: string): string {
 }
 
 export function generatePayslipHTML(r: CalcResult, company = "HAMTECH"): string {
-  const active = r.lines.filter(l => l.amount !== 0);
-  const gains = active.filter(l => l.classe === 1 && l.amount > 0);
-  const retenues = active.filter(l => l.classe === 2 || (l.classe === 1 && l.amount < 0));
+  // Filter: amount != 0 AND ord_bul > 0 (or undefined for legacy data)
+  const active = r.lines.filter(l => l.amount !== 0 && (l.ord_bul === undefined || l.ord_bul === null || l.ord_bul > 0));
+  // Sort by ord_bul
+  const sorted = [...active].sort((a, b) => (a.ord_bul ?? 999) - (b.ord_bul ?? 999));
+  const gains = sorted.filter(l => l.classe === 1 && l.amount > 0);
+  const retenues = sorted.filter(l => l.classe === 2 || (l.classe === 1 && l.amount < 0));
   const keyCodes = ["763","765","767","770","807","817","819","824"];
-  const keyInfos = active.filter(l => keyCodes.includes(l.code));
+  const keyInfos = sorted.filter(l => keyCodes.includes(l.code));
   const bGains = (r.applied_bonuses ?? []).filter(b => b.computed_amount > 0 && !b.rubrique_code);
   const bRet = (r.applied_bonuses ?? []).filter(b => b.computed_amount < 0 && !b.rubrique_code);
   const pf = fmtPeriod(r.period);

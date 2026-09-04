@@ -22,6 +22,31 @@ pub struct RubriqueDef {
     pub calcul: bool,
     pub cd_nb_base: Option<String>,
     pub cd_taux: Option<String>,
+    // --- Extended fields (Phase 1) ---
+    /// Display order on the printed bulletin (0 or NULL = not shown)
+    #[serde(default)]
+    pub ord_bul: f64,
+    /// Number of decimal places for display
+    #[serde(default)]
+    pub precision: Option<String>,
+    /// Minimum allowed value for manual input
+    #[serde(default)]
+    pub v_min: f64,
+    /// Maximum allowed value for manual input
+    #[serde(default)]
+    pub v_max: f64,
+    /// Number of decimal places for rounding
+    #[serde(default)]
+    pub n_arrondir: i64,
+    /// Formula parameter 1
+    #[serde(default)]
+    pub par_1: f64,
+    /// Formula parameter 2
+    #[serde(default)]
+    pub par_2: f64,
+    /// Alternative/short label
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alibelle: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +70,13 @@ pub struct CalcLine {
     pub taux_value: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formule: Option<String>,
+    // --- Extended fields (Phase 2) ---
+    /// Display order on the bulletin (0 = not shown, >0 = sort order)
+    #[serde(default)]
+    pub ord_bul: f64,
+    /// Number of decimal places for display
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,7 +134,8 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
         .prepare(
             r#"SELECT code, libelle, formule, classe, is_brut, is_impos, is_secu_s,
                is_total, is_imp, is_init, is_regular, is_locked, init_val, ord_clc, manuelle,
-               cd_nb_base, cd_taux, calcul
+               cd_nb_base, cd_taux, calcul,
+               ord_bul, precision, v_min, v_max, n_arrondir, par_1, par_2, alibelle
                FROM rubriques ORDER BY ord_clc"#,
         )
         .map_err(|e| e.to_string())?;
@@ -128,6 +161,15 @@ pub fn load_rubriques(conn: &Connection) -> Result<Vec<RubriqueDef>, String> {
                 cd_nb_base: row.get::<_, Option<String>>(15)?,
                 cd_taux: row.get::<_, Option<String>>(16)?,
                 calcul: row.get::<_, Option<i64>>(17)?.unwrap_or(0) != 0,
+                // Extended fields
+                ord_bul: row.get::<_, Option<f64>>(18)?.unwrap_or(0.0),
+                precision: row.get::<_, Option<String>>(19)?,
+                v_min: row.get::<_, Option<f64>>(20)?.unwrap_or(0.0),
+                v_max: row.get::<_, Option<f64>>(21)?.unwrap_or(0.0),
+                n_arrondir: row.get::<_, Option<i64>>(22)?.unwrap_or(0),
+                par_1: row.get::<_, Option<f64>>(23)?.unwrap_or(0.0),
+                par_2: row.get::<_, Option<f64>>(24)?.unwrap_or(0.0),
+                alibelle: row.get::<_, Option<String>>(25)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1377,6 +1419,8 @@ pub fn calculate_salary(
                 base_value: Some(n050),
                 taux_value: Some(r010),
                 formule: Some("N[050]*R[010]".to_string()),
+                ord_bul: 0.0,
+                precision: None,
             });
             // Add R050 to T[04] (total retenues)
             *t_values.entry(4).or_insert(0.0) += r050;
@@ -1426,6 +1470,8 @@ pub fn calculate_salary(
                 base_value,
                 taux_value,
                 formule: None,
+                ord_bul: rub.ord_bul,
+                precision: rub.precision.clone(),
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             continue;
@@ -1448,6 +1494,8 @@ pub fn calculate_salary(
                 base_value,
                 taux_value,
                 formule: None,
+                ord_bul: rub.ord_bul,
+                precision: rub.precision.clone(),
             });
             accumulate_t(&mut t_values, rub, m_val, &mut cotisable_gains);
             continue;
@@ -1608,6 +1656,8 @@ pub fn calculate_salary(
                 base_value,
                 taux_value,
                 formule: rub.formule.clone(),
+                ord_bul: rub.ord_bul,
+                precision: rub.precision.clone(),
             });
             accumulate_t(&mut t_values, rub, amount, &mut cotisable_gains);
             // After R655: restore R099 and reset T[15]=1.0
@@ -1658,6 +1708,8 @@ pub fn calculate_salary(
             base_value,
             taux_value,
             formule: rub.formule.clone(),
+            ord_bul: rub.ord_bul,
+            precision: rub.precision.clone(),
         });
         debug_log.push(DebugLogEntry {
             step: "formula".to_string(), code: code.clone(), action: "eval".to_string(),
@@ -2718,6 +2770,8 @@ mod tests {
             base_value: None,
             taux_value: None,
             formule: None,
+            ord_bul: 0.0,
+            precision: None,
         };
         assert_eq!(line.formula.as_deref(), Some("R[001]"));
         assert_eq!(line.evaluated_formula.as_deref(), Some("50000.00"));
