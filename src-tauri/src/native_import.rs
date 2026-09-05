@@ -1125,12 +1125,13 @@ fn import_conges_parallel(app: &Connection, path: &str, progress: ProgressCb) ->
 }
 
 // ================================================================
-// MCC libelles — import rubrique labels from WDOC/MULTI_COLONNES/*.MCC files
-// MCC files are UTF-16-LE encoded INI-like configs that contain user-defined
-// column labels for reports. They often have libelles that are empty in RUBRIQUEX.DTA.
+// MCC/MCS/DPP libelles — import rubrique labels from WDOC config files
+// MCC (Multi-Colonnes), MCS (Multi-Colonnes Single), and DPP (bulletin templates)
+// are UTF-16-LE encoded INI-like configs that contain user-defined column/bulletin
+// labels for reports. They often have libelles that are empty in RUBRIQUEX.DTA.
 // ================================================================
 
-/// Find all .MCC files in a directory and its subdirectories (case-insensitive).
+/// Find all .MCC, .MCS, and .DPP files in a directory and its subdirectories (case-insensitive).
 fn find_mcc_files(folder: &str) -> Vec<String> {
     let mut result = Vec::new();
     let path = std::path::Path::new(folder);
@@ -1143,7 +1144,7 @@ fn find_mcc_files(folder: &str) -> Vec<String> {
                 result.extend(find_mcc_files(&sub));
             } else if p.is_file() {
                 let name = entry.file_name().to_string_lossy().to_uppercase();
-                if name.ends_with(".MCC") {
+                if name.ends_with(".MCC") || name.ends_with(".MCS") || name.ends_with(".DPP") {
                     result.push(p.to_string_lossy().to_string());
                 }
             }
